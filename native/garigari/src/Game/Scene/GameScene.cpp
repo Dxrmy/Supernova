@@ -2,9 +2,9 @@
 #include "Game/AudioLib/AudSystemWrapper.hpp"
 #include "Game/Camera/CameraDirector.hpp"
 #include "Game/Gravity/PlanetGravityManager.hpp"
-#include "Game/Gravity/PointGravity.hpp"
 #include "Game/LiveActor/Nerve.hpp"
 #include "Game/Player/MarioActor.hpp"
+#include "Game/Scene/SceneObjHolder.hpp"
 #include "Game/Scene/StageDataHolder.hpp"
 #include "Game/System/GameDataFunction.hpp"
 #include "Game/System/GameDataHolder.hpp"
@@ -57,7 +57,6 @@ namespace {
     CameraDirector sCameraDirector;
     MarioActor sMarioActor;
     PlanetGravityManager* sStageGravity = nullptr;
-    PointGravity sStagePointGrav;
     u32 sPrevButtons = 0u;
     LayoutManager* sTitleLogoLayout = nullptr;
     LayoutManager* sPressStartLayout = nullptr;
@@ -288,7 +287,6 @@ GameScene::GameScene()
 GameScene::~GameScene() {
     delete mStageDataHolder;
     mStageDataHolder = nullptr;
-    delete sStageGravity;
     sStageGravity = nullptr;
 }
 
@@ -376,13 +374,9 @@ void GameScene::enterStage(const char* pStageName) {
     mActiveStage = pStageName != nullptr ? pStageName : defaultStage;
     if (mStageDataHolder != nullptr) {
         mStageDataHolder->mountStage(mActiveStage);
+        mStageDataHolder->loadStageGravities(mActiveStage);
     }
-    if (sStageGravity == nullptr) {
-        sStageGravity = new PlanetGravityManager("StageGravity");
-        sStagePointGrav.setOrig(TVec3f(0.0f, 0.0f, 0.0f));
-        sStagePointGrav.mRange = 5000.0f;
-        sStageGravity->registerGravity(&sStagePointGrav);
-    }
+    sStageGravity = MR::getSceneObj<PlanetGravityManager>(SceneObj_PlanetGravityManager);
     Smg23D::mountStageModels(mActiveStage);
     sCameraDirector.init();
     sCameraDirector.setStageTarget(mActiveStage);

@@ -9,6 +9,7 @@ public:
     StageDataHolder();
 
     bool mountStage(const char* pStageName);
+    s32 loadStageGravities(const char* pStageName);
     const char* getStageName() const { return mStageName; }
     bool isMounted() const { return mMounted; }
 

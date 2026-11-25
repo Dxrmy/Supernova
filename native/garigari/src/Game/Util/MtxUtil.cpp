@@ -232,4 +232,40 @@ namespace MR {
         PSMTXInverse(a1, mtx);
         PSMTXConcat(mtx, a2, *pMtx);
     }
+
+    void preScaleMtx(MtxPtr mtx, const TVec3f& rScale) {
+        if (mtx == nullptr) return;
+        PSMTXScale(tmpmtx_sc, rScale.x, rScale.y, rScale.z);
+        PSMTXConcat(mtx, tmpmtx_sc, mtx);
+    }
+
+    void makeMtxRotate(MtxPtr mtx, f32 rxDeg, f32 ryDeg, f32 rzDeg) {
+        if (mtx == nullptr) return;
+        constexpr f32 kDegToRad = 3.14159265358979323846f / 180.0f;
+        PSMTXRotRad(tmpmtx_rx, 'x', rxDeg * kDegToRad);
+        PSMTXRotRad(tmpmtx_ry, 'y', ryDeg * kDegToRad);
+        PSMTXRotRad(tmpmtx_rz, 'z', rzDeg * kDegToRad);
+        PSMTXConcat(tmpmtx_rz, tmpmtx_ry, mtx);
+        PSMTXConcat(mtx, tmpmtx_rx, mtx);
+    }
+
+    void makeMtxRotate(MtxPtr mtx, const TVec3f& rRotate) {
+        makeMtxRotate(mtx, rRotate.x, rRotate.y, rRotate.z);
+    }
+
+    void makeMtxTR(MtxPtr mtx, f32 tx, f32 ty, f32 tz, f32 rx, f32 ry, f32 rz) {
+        if (mtx == nullptr) return;
+        makeMtxRotate(mtx, rx, ry, rz);
+        setMtxTrans(mtx, tx, ty, tz);
+    }
+
+    void makeMtxTR(MtxPtr mtx, const TVec3f& rTrans, const TVec3f& rRotate) {
+        makeMtxTR(mtx, rTrans.x, rTrans.y, rTrans.z, rRotate.x, rRotate.y, rRotate.z);
+    }
+
+    void makeMtxTRS(MtxPtr mtx, const TVec3f& rTrans, const TVec3f& rRotate, const TVec3f& rScale) {
+        if (mtx == nullptr) return;
+        makeMtxTR(mtx, rTrans, rRotate);
+        preScaleMtx(mtx, rScale);
+    }
 };  // namespace MR

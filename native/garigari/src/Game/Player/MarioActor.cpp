@@ -79,12 +79,7 @@ void MarioActor::init(const char* pStageName) {
     mAnimState = 0;
     mGrounded = false;
     mPrevButtons = 0u;
-    mUsePlanarGravity = true;
-    if (pStageName != nullptr && std::strstr(pStageName, "Disc") == nullptr &&
-        std::strstr(pStageName, "IslandFleet") == nullptr &&
-        std::strstr(pStageName, "MarioFaceShip") == nullptr) {
-        mUsePlanarGravity = false;
-    }
+    mUsePlanarGravity = false;
 
     f32 hx = 0.0f, hy = 0.0f, hz = 0.0f, nx = 0.0f, ny = 1.0f, nz = 0.0f;
     if (Smg23D::raycastPlanet(mPos.x, mPos.y + 400.0f, mPos.z, 0.0f, -1.0f, 0.0f, 4000.0f,

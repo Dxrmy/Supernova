@@ -1,4 +1,5 @@
 #include "Game/Scene/SceneObjHolder.hpp"
+#include "Game/Gravity/PlanetGravityManager.hpp"
 #include "Game/NameObj/NameObj.hpp"
 #include "Game/Util/SingletonHolder.hpp"
 #include "Game/System/GameSystem.hpp"
@@ -34,7 +35,8 @@ bool SceneObjHolder::isExist(int id) const {
 
 NameObj* SceneObjHolder::newEachObj(int id) {
     switch (id) {
-    // Good luck to the poor soul who does this
+    case SceneObj_PlanetGravityManager:
+        return new PlanetGravityManager("PlanetGravityManager");
     default:
         return nullptr;
     }

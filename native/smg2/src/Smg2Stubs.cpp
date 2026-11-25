@@ -116,27 +116,6 @@ namespace MR {
         return sIdentityZoneMtx;
     }
 
-    // TODO(Garigari): Remaining MtxUtil.cpp functions not yet decompiled upstream.
-    void makeMtxRotate(MtxPtr mtx, f32, f32, f32) {
-        SMG2_UNIMPLEMENTED("MR::makeMtxRotate(MtxPtr, f32, f32, f32)");
-        if (mtx != nullptr) PSMTXIdentity(mtx);
-    }
-
-    void makeMtxRotate(MtxPtr mtx, const TVec3f&) {
-        SMG2_UNIMPLEMENTED("MR::makeMtxRotate(MtxPtr, const TVec3f&)");
-        if (mtx != nullptr) PSMTXIdentity(mtx);
-    }
-
-    void makeMtxTR(MtxPtr mtx, f32, f32, f32, f32, f32, f32) {
-        SMG2_UNIMPLEMENTED("MR::makeMtxTR(MtxPtr, f32 x6)");
-        if (mtx != nullptr) PSMTXIdentity(mtx);
-    }
-
-    void makeMtxTR(MtxPtr mtx, const TVec3f&, const TVec3f&) {
-        SMG2_UNIMPLEMENTED("MR::makeMtxTR(MtxPtr, const TVec3f&, const TVec3f&)");
-        if (mtx != nullptr) PSMTXIdentity(mtx);
-    }
-
     void makeMtxFrontUp(TPos3f* mtx, const TVec3f&, const TVec3f&) {
         SMG2_UNIMPLEMENTED("MR::makeMtxFrontUp");
         if (mtx != nullptr) mtx->identity();
@@ -157,3 +136,13 @@ namespace MR {
         if (mtx != nullptr) mtx->identity();
     }
 }  // namespace MR
+
+// TODO(Garigari): WireGravityCreator references RailRider (BezierRail not yet ported).
+#include "Game/LiveActor/RailRider.hpp"
+RailRider::RailRider(const JMapInfoIter&) : mBezierRail(nullptr), mCoord(0.0f), mSpeed(0.0f), mIsNotReverse(true) {
+    SMG2_UNIMPLEMENTED("RailRider::RailRider");
+}
+f32 RailRider::getTotalLength() const { return 0.0f; }
+void RailRider::setCoord(f32 coord) { mCoord = coord; }
+void RailRider::setSpeed(f32 speed) { mSpeed = speed; }
+void RailRider::move() {}
