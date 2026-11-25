@@ -30,7 +30,8 @@
 
 namespace Smg2Render {
     uint32_t registerPipelines();
-    void submitFrame(uint32_t frame);
+    void beginFrame();
+    void endFrame();
 }  // namespace Smg2Render
 
 namespace {
@@ -187,8 +188,9 @@ extern "C" void nebula_game_main(void) {
         if (host != nullptr && host->frame_begun != nullptr) {
             host->frame_begun(host->user, 0, frame);
         }
+        Smg2Render::beginFrame();
         pGameSystem->frameLoop();
-        Smg2Render::submitFrame(frame);
+        Smg2Render::endFrame();
         if (host != nullptr && host->test_frame_step != nullptr) {
             host->test_frame_step(host->user);
             break;

@@ -386,10 +386,8 @@ JKRErrorHandler JKRHeap::setErrorHandler(JKRErrorHandler handler) {
 void JKRArchive::setExpandSize(SDIFileEntry*, u32) {}
 u32 JKRArchive::getExpandSize(SDIFileEntry*) const { return 0; }
 
-void* operator new(size_t size, int) { return malloc(size == 0 ? 1 : size); }
 void* operator new(size_t size, JKRHeap*) { return malloc(size == 0 ? 1 : size); }
 void* operator new(size_t size, JKRHeap*, int) { return malloc(size == 0 ? 1 : size); }
-void* operator new[](size_t size, int) { return malloc(size == 0 ? 1 : size); }
 void* operator new[](size_t size, JKRHeap*, int) { return malloc(size == 0 ? 1 : size); }
 
 namespace JGeometry {
@@ -688,61 +686,7 @@ namespace MR {
         nebula_snprintf(pDst, size, "/StageData/%s/%sScenario.arc", pStageName != nullptr ? pStageName : "", pStageName != nullptr ? pStageName : "");
     }
 
-    int strcasecmp(const char* pStr1, const char* pStr2) {
-        if (pStr1 == nullptr || pStr2 == nullptr) {
-            return pStr1 == pStr2 ? 0 : (pStr1 == nullptr ? -1 : 1);
-        }
-        return nebula_stricmp(pStr1, pStr2);
-    }
-
-    bool isEqualSubString(const char* pStr, const char* pSubStr) {
-        if (pStr == nullptr || pSubStr == nullptr) {
-            return false;
-        }
-        return std::strstr(pStr, pSubStr) != nullptr;
-    }
-
-    bool hasStringSpace(const char* pStr) {
-        return pStr != nullptr && std::strchr(pStr, ' ') != nullptr;
-    }
-
-    bool isNullOrEmptyString(const char* pStr) {
-        return pStr == nullptr || pStr[0] == '\0';
-    }
-
-    bool isEqualString(const char* pA, const char* pB) {
-        if (pA == nullptr || pB == nullptr) {
-            return pA == pB;
-        }
-        return std::strcmp(pA, pB) == 0;
-    }
-
-    bool isEqualStringCase(const char* pA, const char* pB) {
-        if (pA == nullptr || pB == nullptr) {
-            return pA == pB;
-        }
-        return nebula_stricmp(pA, pB) == 0;
-    }
-
-    void copyString(char* pDst, const char* pSrc, u32 maxLen) {
-        if (pDst == nullptr || maxLen == 0) {
-            return;
-        }
-        if (pSrc == nullptr) {
-            pDst[0] = '\0';
-            return;
-        }
-        std::strncpy(pDst, pSrc, maxLen - 1);
-        pDst[maxLen - 1] = '\0';
-    }
-
-    const char* getBasename(const char* pPath) {
-        if (pPath == nullptr) {
-            return "";
-        }
-        const char* last = std::strrchr(pPath, '/');
-        return last != nullptr ? last + 1 : pPath;
-    }
+    void copyString(char* pDst, const char* pSrc, u32 maxLen);
 
     char* removeExtensionString(char* pDst, u32 maxLen, const char* pSrc) {
         copyString(pDst, pSrc, maxLen);

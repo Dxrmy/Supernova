@@ -7,9 +7,19 @@
 #include "Game/Util/NerveUtil.hpp"
 #include <nebula_module.h>
 
-namespace Smg2Render {
-    void setVisualScreenState(int state, float alpha, s32 fileSlot, const char* stageName);
-}  // namespace Smg2Render
+class LayoutManager;
+namespace Smg2Ui {
+    LayoutManager* createLayout(const char* pName, bool usePrefix, u32 rootAnimLayers, u32 textBoxLen, bool keepText);
+    void movementLayout(LayoutManager* pMgr);
+    void calcAnimLayout(LayoutManager* pMgr);
+    void drawLayout(const LayoutManager* pMgr);
+    void startRootAnim(LayoutManager* pMgr, const char* pAnimName, u32 layer);
+    bool isRootAnimStopped(const LayoutManager* pMgr, u32 layer);
+}  // namespace Smg2Ui
+
+namespace {
+    LayoutManager* sStrapLayout = nullptr;
+}  // namespace
 
 namespace NrvLogoScene {
     NEW_NERVE(LogoSceneNrvStrapFadein, LogoScene, StrapFadein);
@@ -37,15 +47,17 @@ void LogoScene::init() {
 void LogoScene::update() {
     updateNerve();
     SceneFunction::executeMovementList();
+    Smg2Ui::movementLayout(sStrapLayout);
 }
 
 void LogoScene::calcAnim() {
     SceneFunction::executeCalcAnimList();
     SceneFunction::executeCalcViewAndEntryList2D();
+    Smg2Ui::calcAnimLayout(sStrapLayout);
 }
 
 void LogoScene::draw() const {
-    // 2D Strap/Logo fade state is pushed to Smg2Render in exe* steps.
+    Smg2Ui::drawLayout(sStrapLayout);
 }
 
 bool LogoScene::isDisplayStrapRemineder() const {
@@ -57,22 +69,29 @@ bool LogoScene::isDisplayStrapRemineder() const {
 }
 
 void LogoScene::initLayout() {
-    // TODO(Garigari): instantiate SimpleLayout("Strap") & LogoFader once LayoutActor/SimpleLayout deps are wired.
-    Smg2Render::setVisualScreenState(0, 0.0f, 0, nullptr);
+    if (sStrapLayout == nullptr) {
+        sStrapLayout = Smg2Ui::createLayout("Strap", true, 1u, 0u, true);
+    }
+    if (sStrapLayout != nullptr) {
+        Smg2Ui::startRootAnim(sStrapLayout, "Appear", 0u);
+    }
 }
 
 bool LogoScene::tryFadeinLayout(LayoutActor*) {
-    const s32 step = getNerveStep();
-    const float alpha = step >= 15 ? 1.0f : static_cast<float>(step) / 15.0f;
-    Smg2Render::setVisualScreenState(0, alpha, 0, nullptr);
-    return step >= 15;
+    if (sStrapLayout != nullptr) {
+        return Smg2Ui::isRootAnimStopped(sStrapLayout, 0u) || getNerveStep() >= 30;
+    }
+    return getNerveStep() >= 15;
 }
 
 bool LogoScene::tryFadeoutLayout(LayoutActor*) {
-    const s32 step = getNerveStep();
-    const float alpha = step >= 15 ? 0.0f : 1.0f - static_cast<float>(step) / 15.0f;
-    Smg2Render::setVisualScreenState(0, alpha, 0, nullptr);
-    return step >= 15;
+    if (sStrapLayout != nullptr && getNerveStep() == 0) {
+        Smg2Ui::startRootAnim(sStrapLayout, "End", 0u);
+    }
+    if (sStrapLayout != nullptr) {
+        return Smg2Ui::isRootAnimStopped(sStrapLayout, 0u) || getNerveStep() >= 30;
+    }
+    return getNerveStep() >= 15;
 }
 
 void LogoScene::exeStrapFadein() {
@@ -82,7 +101,6 @@ void LogoScene::exeStrapFadein() {
 }
 
 void LogoScene::exeStrapDisplay() {
-    Smg2Render::setVisualScreenState(0, 1.0f, 0, nullptr);
     if (getNerveStep() >= 30) {
         setNerve(GET_NERVE(LogoScene, LogoSceneNrvStrapFadeout));
     }

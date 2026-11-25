@@ -32,6 +32,13 @@ void svc_fatal(void*, const char* text) {
 }
 
 void* svc_heap_alloc(void*, size_t size) { return std::malloc(size == 0 ? 1 : size); }
+void* svc_memory_reserve(void*, size_t size) { return VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_READWRITE); }
+int svc_memory_commit(void*, void* address, size_t size) {
+    return VirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE) != nullptr ? 1 : 0;
+}
+void svc_memory_release(void*, void* address, size_t) {
+    if (address != nullptr) VirtualFree(address, 0, MEM_RELEASE);
+}
 void* svc_heap_realloc(void*, void* p, size_t size) { return std::realloc(p, size == 0 ? 1 : size); }
 void svc_heap_free(void*, void* p) { std::free(p); }
 
@@ -141,6 +148,9 @@ int main(int argc, char** argv) {
     svc.heap_alloc = svc_heap_alloc;
     svc.heap_realloc = svc_heap_realloc;
     svc.heap_free = svc_heap_free;
+    svc.memory_reserve = svc_memory_reserve;
+    svc.memory_commit = svc_memory_commit;
+    svc.memory_release = svc_memory_release;
     svc.asset_find = svc_asset_find;
     svc.asset_find_game = svc_asset_find;
     svc.asset_entry = svc_asset_entry;

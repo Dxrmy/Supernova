@@ -19,10 +19,15 @@ namespace MR {
 
 extern "C" const NebulaHostServices* nebula_host(void);
 
-namespace Smg2Render {
-    void setVisualScreenState(int state, float alpha, s32 fileSlot, const char* stageName);
-    void setCameraAndPlayerPreview(float camYaw, float playerX, float playerZ);
-}  // namespace Smg2Render
+class LayoutManager;
+namespace Smg2Ui {
+    LayoutManager* createLayout(const char* pName, bool usePrefix, u32 rootAnimLayers, u32 textBoxLen, bool keepText);
+    void movementLayout(LayoutManager* pMgr);
+    void calcAnimLayout(LayoutManager* pMgr);
+    void drawLayout(const LayoutManager* pMgr);
+    void startRootAnim(LayoutManager* pMgr, const char* pAnimName, u32 layer);
+    bool isRootAnimStopped(const LayoutManager* pMgr, u32 layer);
+}  // namespace Smg2Ui
 
 namespace {
     GameSequenceTitle sTitleSeq;
@@ -31,6 +36,11 @@ namespace {
     PlanetGravityManager* sStageGravity = nullptr;
     PointGravity sStagePointGrav;
     u32 sPrevButtons = 0u;
+    LayoutManager* sTitleLogoLayout = nullptr;
+    LayoutManager* sPressStartLayout = nullptr;
+    LayoutManager* sFileSelectLayout = nullptr;
+    bool sTitleWaitStarted = false;
+    bool sPressStartWaitStarted = false;
 }  // namespace
 
 GameScene::GameScene()
@@ -59,8 +69,17 @@ void GameScene::init() {
     if (GameSystemObjHolder* holder = MR::getGameSystemObjHolder(); holder != nullptr && holder->mAudioSystem != nullptr) {
         holder->mAudioSystem->startStageBgm("Title");
     }
-    Smg2Render::setVisualScreenState(1, 1.0f, mSelectedFileSlot, mActiveStage);
-    nebula_log("[SMG2-SCENE] GameScene::init() -> Title Screen (press A / Enter / Space to enter File Select)");
+    if (sTitleLogoLayout == nullptr) {
+        sTitleLogoLayout = Smg2Ui::createLayout("TitleLogo", true, 2u, 0u, true);
+    }
+    if (sPressStartLayout == nullptr) {
+        sPressStartLayout = Smg2Ui::createLayout("PressStart", true, 1u, 0u, true);
+    }
+    sTitleWaitStarted = false;
+    sPressStartWaitStarted = false;
+    Smg2Ui::startRootAnim(sTitleLogoLayout, "Appear", 0u);
+    Smg2Ui::startRootAnim(sPressStartLayout, "Appear", 0u);
+    nebula_log("[SMG2-SCENE] GameScene::init() -> Title Screen (real NLYT/NLAN TitleLogo + PressStart)");
 }
 
 void GameScene::enterFileSelect() {
@@ -73,7 +92,10 @@ void GameScene::enterFileSelect() {
     if (GameSystemObjHolder* holder = MR::getGameSystemObjHolder(); holder != nullptr && holder->mAudioSystem != nullptr) {
         holder->mAudioSystem->startStageBgm("FileSelect");
     }
-    Smg2Render::setVisualScreenState(2, 1.0f, mSelectedFileSlot, mActiveStage);
+    if (sFileSelectLayout == nullptr) {
+        sFileSelectLayout = Smg2Ui::createLayout("FileSelect", true, 2u, 0u, true);
+    }
+    Smg2Ui::startRootAnim(sFileSelectLayout, "Appear", 0u);
     nebula_log("[SMG2-SCENE] GameScene -> File Select (slot=%d, user='%s', stars=%d)",
                mSelectedFileSlot, GameDataFunction::getUserName(), GameDataFunction::calcCurrentPowerStarNum());
 }
@@ -97,7 +119,6 @@ void GameScene::enterStage(const char* pStageName) {
     if (GameSystemObjHolder* holder = MR::getGameSystemObjHolder(); holder != nullptr && holder->mAudioSystem != nullptr) {
         holder->mAudioSystem->startStageBgm(mActiveStage);
     }
-    Smg2Render::setVisualScreenState(3, 1.0f, mSelectedFileSlot, mActiveStage);
     nebula_log("[SMG2-SCENE] GameScene -> InStage '%s'", mActiveStage);
 }
 
@@ -120,16 +141,27 @@ void GameScene::update() {
 
     if (mPhase == Phase_Title) {
         sTitleSeq.update();
+        if (!sTitleWaitStarted && Smg2Ui::isRootAnimStopped(sTitleLogoLayout, 0u)) {
+            sTitleWaitStarted = true;
+            Smg2Ui::startRootAnim(sTitleLogoLayout, "Wait", 0u);
+        }
+        if (!sPressStartWaitStarted && Smg2Ui::isRootAnimStopped(sPressStartLayout, 0u)) {
+            sPressStartWaitStarted = true;
+            Smg2Ui::startRootAnim(sPressStartLayout, "Wait", 0u);
+        }
+        Smg2Ui::movementLayout(sTitleLogoLayout);
+        Smg2Ui::movementLayout(sPressStartLayout);
         if ((pressed & (NEBULA_BUTTON_A | NEBULA_BUTTON_PLUS)) != 0u) {
+            Smg2Ui::startRootAnim(sTitleLogoLayout, "Decide", 0u);
+            Smg2Ui::startRootAnim(sPressStartLayout, "End", 0u);
             enterFileSelect();
         }
     } else if (mPhase == Phase_FileSelect) {
+        Smg2Ui::movementLayout(sFileSelectLayout);
         if ((pressed & NEBULA_BUTTON_UP) != 0u || (pressed & NEBULA_BUTTON_LEFT) != 0u) {
             mSelectedFileSlot = mSelectedFileSlot > 1 ? mSelectedFileSlot - 1 : 3;
-            Smg2Render::setVisualScreenState(2, 1.0f, mSelectedFileSlot, mActiveStage);
         } else if ((pressed & NEBULA_BUTTON_DOWN) != 0u || (pressed & NEBULA_BUTTON_RIGHT) != 0u) {
             mSelectedFileSlot = mSelectedFileSlot < 3 ? mSelectedFileSlot + 1 : 1;
-            Smg2Render::setVisualScreenState(2, 1.0f, mSelectedFileSlot, mActiveStage);
         } else if ((pressed & (NEBULA_BUTTON_A | NEBULA_BUTTON_PLUS)) != 0u) {
             sTitleSeq.setSelectedSlot(mSelectedFileSlot);
             sTitleSeq.decide();
@@ -138,19 +170,31 @@ void GameScene::update() {
             mPhase = Phase_Title;
             mPhaseSteps = 0;
             mActiveStage = "Title";
-            Smg2Render::setVisualScreenState(1, 1.0f, mSelectedFileSlot, mActiveStage);
+            sTitleWaitStarted = false;
+            sPressStartWaitStarted = false;
+            Smg2Ui::startRootAnim(sTitleLogoLayout, "Appear", 0u);
+            Smg2Ui::startRootAnim(sPressStartLayout, "Appear", 0u);
         }
     } else {
         sCameraDirector.update(stickX, stickY);
         sMarioActor.update(stickX, stickY, buttons, sStageGravity);
-        Smg2Render::setCameraAndPlayerPreview(sCameraDirector.getYaw(), sMarioActor.getPosition().x, sMarioActor.getPosition().z);
     }
 }
 
 void GameScene::calcAnim() {
+    if (mPhase == Phase_Title) {
+        Smg2Ui::calcAnimLayout(sTitleLogoLayout);
+        Smg2Ui::calcAnimLayout(sPressStartLayout);
+    } else if (mPhase == Phase_FileSelect) {
+        Smg2Ui::calcAnimLayout(sFileSelectLayout);
+    }
 }
 
 void GameScene::draw() const {
-    const int state = (mPhase == Phase_Title) ? 1 : (mPhase == Phase_FileSelect ? 2 : 3);
-    Smg2Render::setVisualScreenState(state, 1.0f, mSelectedFileSlot, mActiveStage);
+    if (mPhase == Phase_Title) {
+        Smg2Ui::drawLayout(sTitleLogoLayout);
+        Smg2Ui::drawLayout(sPressStartLayout);
+    } else if (mPhase == Phase_FileSelect) {
+        Smg2Ui::drawLayout(sFileSelectLayout);
+    }
 }

@@ -112,7 +112,113 @@ set(game_runtime_sources
     $<$<PLATFORM_ID:Windows>:${nebula_native}/math/src/nebula_runtime_win.c>
 )
 
+add_library(smg2_petari_ui STATIC
+    "${nebula_native}/petari/src/Game/Ui/Animation.cpp"
+    "${nebula_native}/petari/src/Game/Ui/Bounding.cpp"
+    "${nebula_native}/petari/src/Game/Ui/CharStrmReader.cpp"
+    "${nebula_native}/petari/src/Game/Ui/CharWriter.cpp"
+    "${nebula_native}/petari/src/Game/Ui/DrawInfo.cpp"
+    "${nebula_native}/petari/src/Game/Ui/Font.cpp"
+    "${nebula_native}/petari/src/Game/Ui/Group.cpp"
+    "${nebula_native}/petari/src/Game/Ui/Layout.cpp"
+    "${nebula_native}/petari/src/Game/Ui/Material.cpp"
+    "${nebula_native}/petari/src/Game/Ui/Pane.cpp"
+    "${nebula_native}/petari/src/Game/Ui/Picture.cpp"
+    "${nebula_native}/petari/src/Game/Ui/ResFont.cpp"
+    "${nebula_native}/petari/src/Game/Ui/ResFontBase.cpp"
+    "${nebula_native}/petari/src/Game/Ui/ResourceAccessor.cpp"
+    "${nebula_native}/petari/src/Game/Ui/TagProcessorBase.cpp"
+    "${nebula_native}/petari/src/Game/Ui/TexMap.cpp"
+    "${nebula_native}/petari/src/Game/Ui/TextBox.cpp"
+    "${nebula_native}/petari/src/Game/Ui/TextWriterBase.cpp"
+    "${nebula_native}/petari/src/Game/Ui/UiCommon.cpp"
+    "${nebula_native}/petari/src/Game/Ui/UiInit.cpp"
+    "${nebula_native}/petari/src/Game/Ui/Window.cpp"
+    "${nebula_native}/petari/src/Game/Render/Clip.cpp"
+    "${nebula_native}/petari/src/Game/Render/FrameList.cpp"
+    "${nebula_native}/petari/src/Game/Render/GameTexture.cpp"
+    "${nebula_native}/petari/src/Game/Render/Material.cpp"
+    "${nebula_native}/petari/src/Game/Render/Model.cpp"
+    "${nebula_native}/petari/src/Game/Render/ModelData.cpp"
+    "${nebula_native}/petari/src/Game/Render/RenderTexture.cpp"
+    "${nebula_native}/petari/src/Game/Render/Transform.cpp"
+    "${nebula_native}/petari/src/Game/Render/TypedDraw.cpp"
+    "${nebula_native}/petari/src/Game/System/NebulaArena.cpp"
+    "${nebula_native}/petari/src/Game/System/Arenas.cpp"
+    "${nebula_native}/petari/src/Game/System/GameAssets.cpp"
+    "${nebula_native}/petari/src/Game/System/AssetFolder.cpp"
+    "${nebula_native}/petari/src/Game/System/NebulaFrameClock.cpp"
+    "${nebula_native}/petari/src/Game/System/GameFrame.cpp"
+    "${nebula_native}/petari/src/Game/System/LayoutHolder.cpp"
+    "${nebula_native}/petari/src/Game/System/GameSystemFontHolder.cpp"
+    "${nebula_native}/petari/src/Game/System/NebulaText.cpp"
+    "${nebula_native}/petari/src/Game/Screen/LayoutManager.cpp"
+    "${nebula_native}/petari/src/Game/Screen/LayoutAspect.cpp"
+    "${nebula_native}/petari/src/Game/Screen/LayoutCoreUtil.cpp"
+    "${nebula_native}/petari/src/Game/Screen/LayoutGroupCtrl.cpp"
+    "${nebula_native}/petari/src/Game/Screen/LayoutPaneCtrl.cpp"
+    "${nebula_native}/petari/src/Game/Animation/LayoutAnmPlayer.cpp"
+    "${nebula_native}/petari/src/Game/Screen/ReplaceTagProcessor.cpp"
+    "${nebula_native}/petari/src/Game/Screen/CustomTagProcessor.cpp"
+    "${nebula_native}/petari/src/Game/Screen/MessageTagSkipTagProcessor.cpp"
+    "${nebula_native}/petari/src/Game/Util/DrawUtil.cpp"
+    "${nebula_native}/petari/src/Game/Util/DirectDraw.cpp"
+    "${nebula_native}/petari/src/Game/Util/StringUtil.cpp"
+    "${nebula_native}/petari/src/Game/Util/MemoryUtil.cpp"
+    "${nebula_native}/petari/src/Game/Util/TextString.cpp"
+    src/Smg2PetariBridge.cpp
+)
+
+target_include_directories(smg2_petari_ui BEFORE PRIVATE
+    "${nebula_native}/math/include"
+    "${nebula_native}/petari/include"
+    "${nebula_native}/include"
+)
+
+target_compile_definitions(smg2_petari_ui PRIVATE
+    VERSION=1
+    RMGJ01=0
+    RMGE01=1
+    RMGP01=2
+    RMGK01=3
+    NEBULA_GAME_MODULE=1
+    _HAS_EXCEPTIONS=0
+    _CRT_SECURE_NO_WARNINGS
+    _USE_STD_VECTOR_ALGORITHMS=0
+    _ACRTIMP=
+)
+
+set_target_properties(smg2_petari_ui PROPERTIES
+    C_STANDARD 11 C_EXTENSIONS ON
+    CXX_STANDARD 17 CXX_EXTENSIONS ON
+    C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
+)
+
+target_compile_options(smg2_petari_ui PRIVATE
+    -ffp-contract=off
+    -fno-strict-aliasing
+    -fno-math-errno
+    -fno-stack-protector
+    -fno-delayed-template-parsing
+    -Wno-unknown-pragmas
+    -Wno-unused-parameter
+    -Wno-ignored-qualifiers
+    -Wno-deprecated-declarations
+    -Wno-c++11-narrowing
+    -Wno-writable-strings
+    -Wno-gcc-compat
+    -mstack-probe-size=65536
+    -Wframe-larger-than=16384
+    "SHELL:-include nebula_prelude.h"
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti -fno-c++-static-destructors -fno-sized-deallocation -fno-aligned-allocation -fcheck-new>
+)
+
+if(NEBULA_CPU_LEVEL)
+    target_compile_options(smg2_petari_ui PRIVATE -march=${NEBULA_CPU_LEVEL})
+endif()
+
 add_library(smg_game SHARED ${garigari_sources} ${smg2_bridge_sources} ${game_runtime_sources})
+target_link_libraries(smg_game PRIVATE smg2_petari_ui)
 
 # Compat headers MUST precede Garigari/include and Garigari/libs/*/include.
 target_include_directories(smg_game BEFORE PRIVATE
