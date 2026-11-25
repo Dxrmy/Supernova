@@ -72,13 +72,46 @@ namespace {
         if (host->asset_find(host->user, pakPath, &entry) == 0 || entry.length < NEBULA_TEXTURE_HEADER) {
             return 0u;
         }
-        const void* mapped = host->asset_map(host->user, entry.index);
+        const auto* mapped = static_cast<const uint8_t*>(host->asset_map(host->user, entry.index));
         if (mapped == nullptr) {
             return 0u;
         }
+        const void* texBytes = mapped;
+        uint32_t texSize = entry.length;
+        const NebulaTexture* rec = nebula_texture_record(texBytes);
+        if (rec == nullptr && entry.length >= 24u) {
+            uint32_t ver = 0u;
+            std::memcpy(&ver, mapped, 4u);
+            if (ver == 2142000u) {
+                uint32_t count = 0u;
+                uint32_t table = 0u;
+                std::memcpy(&count, mapped + 4u, 4u);
+                std::memcpy(&table, mapped + 8u, 4u);
+                if (count > 0u && table + 8u <= entry.length) {
+                    uint32_t imgHdr = 0u;
+                    std::memcpy(&imgHdr, mapped + table, 4u);
+                    if (imgHdr + 12u <= entry.length) {
+                        uint32_t dataOff = 0u;
+                        std::memcpy(&dataOff, mapped + imgHdr + 8u, 4u);
+                        if (dataOff + NEBULA_TEXTURE_HEADER <= entry.length) {
+                            texBytes = mapped + dataOff;
+                            texSize = entry.length - dataOff;
+                            rec = nebula_texture_record(texBytes);
+                        }
+                    }
+                }
+            }
+        }
+        if (rec == nullptr) {
+            nebula_log("[SMG2-RENDER] Texture %s is not a valid NbTextur/TPL record", pakPath);
+            return 0u;
+        }
         NebulaTextureImage img{};
-        img.bytes = mapped;
-        img.size = entry.length;
+        img.bytes = texBytes;
+        img.size = texSize;
+        img.width = rec->width;
+        img.height = rec->height;
+        img.levels = rec->levels;
         img.format = NEBULA_TEXTURE_IMAGE;
         const uint32_t texId = host->texture_register(host->user, &img);
         if (texId == 0u) {
