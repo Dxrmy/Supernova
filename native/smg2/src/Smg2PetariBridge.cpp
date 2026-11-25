@@ -372,6 +372,9 @@ namespace MR {
     }
 
     const char16_t* getLayoutMessageDirect(const char* pMessageId) {
+        if (pMessageId != nullptr && std::strcmp(pMessageId, "PressStart_PressAB") == 0) {
+            return u"Press A to Start.";
+        }
         if (const char16_t* msg = lookupMessageById(pMessageId)) {
             nebula_log("[SMG2-UI] LayoutMsg HIT: %s", pMessageId);
             return msg;
@@ -640,12 +643,22 @@ namespace Smg23D {
                 GameAssets::FolderEntry fe{};
                 for (u32 i = 0; GameAssets::folderEntry(archivePath, i, &fe); ++i) {
                     if (!fe.mIsFolder && MR::isEqualSubString(fe.mName, ".kcl")) {
+                        GameAssets::File kclFile{};
                         void* kclRes = folder->getResource(fe.mName);
-                        if (kclRes != nullptr) {
-                            auto* srv = new (Arenas::permanent(), 0) KCollisionServer();
-                            srv->setData(kclRes);
-                            sKclServers[sKclCount++] = srv;
-                            nebula_log("[SMG2-3D] Mounted KCL %s/%s (tris=%d)", archivePath, fe.mName, srv->getTriangleNum());
+                        if (kclRes != nullptr && GameAssets::open(fe.mEntry, &kclFile) && kclFile.mLength >= sizeof(NcolHeader)) {
+                            const auto* hdr = static_cast<const NcolHeader*>(kclRes);
+                            if (hdr->mMagic[0] == 'N' && hdr->mMagic[1] == 'C' && hdr->mMagic[2] == 'O' && hdr->mMagic[3] == 'L' &&
+                                hdr->mPosOffset < kclFile.mLength && hdr->mNormOffset < kclFile.mLength &&
+                                hdr->mPrismOffset < kclFile.mLength && hdr->mOctreeOffset < kclFile.mLength) {
+                                auto* srv = new (Arenas::permanent(), 0) KCollisionServer();
+                                srv->setData(kclRes);
+                                if (srv->getTriangleNum() > 0 && srv->mModel.mPos != nullptr &&
+                                    srv->mModel.mNorms != nullptr && srv->mModel.mPrisms != nullptr &&
+                                    srv->mModel.mOctree != nullptr) {
+                                    sKclServers[sKclCount++] = srv;
+                                    nebula_log("[SMG2-3D] Mounted KCL %s/%s (tris=%d)", archivePath, fe.mName, srv->getTriangleNum());
+                                }
+                            }
                         }
                         break;
                     }
@@ -818,13 +831,18 @@ namespace Smg23D {
         Vec3f center(*ioX, *ioY, *ioZ);
         for (u32 k = 0; k < sKclCount; ++k) {
             KCollisionServer* srv = sKclServers[k];
-            if (srv == nullptr) continue;
+            if (srv == nullptr || srv->getTriangleNum() <= 0 || srv->mModel.mPrisms == nullptr ||
+                srv->mModel.mNorms == nullptr || srv->mModel.mOctree == nullptr) {
+                continue;
+            }
             KC_PrismData* prisms[8]{};
             f32 dists[8]{};
             u8 parts[8]{};
             const u32 hits = srv->checkSphere(&center, radius, 0.0f, 8u, prisms, dists, parts);
-            for (u32 h = 0; h < hits; ++h) {
+            for (u32 h = 0; h < hits && h < 8u; ++h) {
                 if (prisms[h] == nullptr) continue;
+                const s32 triIdx = srv->toIndex(prisms[h]);
+                if (triIdx < 0 || triIdx >= srv->getTriangleNum()) continue;
                 const f32 pen = radius - dists[h];
                 if (pen > 0.0f) {
                     const Vec3f* n = srv->getFaceNormal(prisms[h]);
@@ -861,14 +879,20 @@ namespace Smg23D {
         bool found = false;
         for (u32 k = 0; k < sKclCount; ++k) {
             KCollisionServer* srv = sKclServers[k];
-            if (srv == nullptr) continue;
+            if (srv == nullptr || srv->getTriangleNum() <= 0 || srv->mModel.mPrisms == nullptr ||
+                srv->mModel.mNorms == nullptr || srv->mModel.mOctree == nullptr) {
+                continue;
+            }
             f32 dists[4]{};
             u8 parts[4]{};
             u32 count = 0;
             KC_PrismData* prisms[4]{};
             if (srv->checkArrow(origin, dir, dists, parts, &count, prisms, 4u) != nullptr) {
-                for (u32 i = 0; i < count; ++i) {
-                    if (prisms[i] != nullptr && dists[i] >= 0.0f && dists[i] < bestT) {
+                for (u32 i = 0; i < count && i < 4u; ++i) {
+                    if (prisms[i] == nullptr) continue;
+                    const s32 triIdx = srv->toIndex(prisms[i]);
+                    if (triIdx < 0 || triIdx >= srv->getTriangleNum()) continue;
+                    if (dists[i] >= 0.0f && dists[i] < bestT) {
                         bestT = dists[i];
                         if (const Vec3f* n = srv->getFaceNormal(prisms[i])) {
                             bestN = *n;
@@ -924,7 +948,7 @@ namespace Smg23D {
     }
 
     static void drawModelWithMtx(Model* pModel, const Mtx baseMtx) {
-        if (pModel == nullptr || pModel->getModelData() == nullptr) return;
+        if (pModel == nullptr || pModel->getModelData() == nullptr || pModel->getModelData()->getJointCount() == 0u) return;
         pModel->setBaseTRMtx(baseMtx);
         pModel->calc();
         pModel->viewCalc();

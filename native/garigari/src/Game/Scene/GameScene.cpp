@@ -307,15 +307,15 @@ void GameScene::calcAnim() {
 
 void GameScene::draw() const {
     if (mPhase == Phase_Title) {
-        const f32 ang = static_cast<f32>(mPhaseSteps) * 0.005f;
-        Smg23D::begin3DScene(2200.0f * __builtin_sinf(ang), 400.0f, 2200.0f * __builtin_cosf(ang), 0.0f, 0.0f, 0.0f, 55.0f, 10.0f, 100000.0f);
+        const f32 ang = static_cast<f32>(mPhaseSteps) * 0.003f;
+        Smg23D::begin3DScene(9500.0f * __builtin_sinf(ang), 1200.0f, 9500.0f * __builtin_cosf(ang), 0.0f, -500.0f, 0.0f, 55.0f, 10.0f, 100000.0f);
         Smg23D::drawMenuBackdrop(static_cast<u32>(mPhaseSteps));
         Smg23D::end3DScene();
         Smg2Ui::drawLayout(sTitleLogoLayout);
         Smg2Ui::drawLayout(sPressStartLayout);
     } else if (mPhase == Phase_FileSelect) {
-        const f32 ang = static_cast<f32>(mPhaseSteps) * 0.005f;
-        Smg23D::begin3DScene(2200.0f * __builtin_sinf(ang), 400.0f, 2200.0f * __builtin_cosf(ang), 0.0f, 0.0f, 0.0f, 55.0f, 10.0f, 100000.0f);
+        const f32 ang = static_cast<f32>(mPhaseSteps) * 0.003f;
+        Smg23D::begin3DScene(9500.0f * __builtin_sinf(ang), 1200.0f, 9500.0f * __builtin_cosf(ang), 0.0f, -500.0f, 0.0f, 55.0f, 10.0f, 100000.0f);
         Smg23D::drawMenuBackdrop(static_cast<u32>(mPhaseSteps));
         Smg23D::end3DScene();
         Smg2Ui::drawLayout(sFileSelectLayout);
