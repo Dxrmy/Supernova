@@ -33,6 +33,13 @@ namespace Smg2Ui {
     void setPaneVisible(LayoutManager* pMgr, const char* pPaneName, bool visible);
 }  // namespace Smg2Ui
 
+namespace Smg23D {
+    void mountStageModels(const char* pStageName);
+    void begin3DScene(f32 camX, f32 camY, f32 camZ, f32 targetX, f32 targetY, f32 targetZ, f32 fovY, f32 nearZ, f32 farZ);
+    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 marioYawRad);
+    void end3DScene();
+}  // namespace Smg23D
+
 namespace {
     GameSequenceTitle sTitleSeq;
     CameraDirector sCameraDirector;
@@ -143,6 +150,7 @@ void GameScene::enterStage(const char* pStageName) {
     sCameraDirector.init();
     sCameraDirector.setStageTarget(mActiveStage);
     sMarioActor.init(mActiveStage);
+    Smg23D::mountStageModels(mActiveStage);
     if (GameSystemObjHolder* holder = MR::getGameSystemObjHolder(); holder != nullptr && holder->mAudioSystem != nullptr) {
         holder->mAudioSystem->startStageBgm(mActiveStage);
     }
@@ -229,5 +237,15 @@ void GameScene::draw() const {
         Smg2Ui::drawLayout(sPressStartLayout);
     } else if (mPhase == Phase_FileSelect) {
         Smg2Ui::drawLayout(sFileSelectLayout);
+    } else {
+        const TVec3f& pos = sMarioActor.getPosition();
+        const f32 yaw = sCameraDirector.getYaw();
+        const f32 camDist = 1100.0f;
+        const f32 camX = pos.x + camDist * __builtin_sinf(yaw);
+        const f32 camY = pos.y + 400.0f;
+        const f32 camZ = pos.z + camDist * __builtin_cosf(yaw);
+        Smg23D::begin3DScene(camX, camY, camZ, pos.x, pos.y + 100.0f, pos.z, 60.0f, 10.0f, 100000.0f);
+        Smg23D::drawStageAndMario(pos.x, pos.y, pos.z, 0.0f);
+        Smg23D::end3DScene();
     }
 }

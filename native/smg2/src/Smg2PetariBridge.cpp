@@ -11,12 +11,17 @@
 #include "Game/Util/ScreenUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
 #include "Game/Util/Table.hpp"
+#include "Game/Render/FrameList.hpp"
+#include "Game/Render/Material.hpp"
+#include "Game/Render/Model.hpp"
+#include "Game/Render/ModelData.hpp"
 #include "Game/Screen/LayoutActor.hpp"
 #include "Game/Screen/LayoutCoreUtil.hpp"
 #include "Game/Screen/LayoutManager.hpp"
 #include "Game/Screen/LayoutPaneCtrl.hpp"
 #include <Game/Ui/ResFont.hpp>
 #include <Game/Ui/TextBox.hpp>
+#include <nebula_math.h>
 #include <nebula_module.h>
 
 #include <cstring>
@@ -504,6 +509,152 @@ namespace Smg2Ui {
         }
     }
 }  // namespace Smg2Ui
+
+namespace Smg23D {
+    namespace {
+        Model* sMarioModel = nullptr;
+        constexpr u32 kMaxStageModels = 16;
+        Model* sStageModels[kMaxStageModels]{};
+        u32 sStageModelCount = 0;
+        bool sStageModelsMounted = false;
+
+        Model* loadModelFromArchive(const char* archivePath, const char* preferredName) {
+            if (GameAssets::find(archivePath) < 0) {
+                return nullptr;
+            }
+            AssetFolder* folder = AssetFolder::mount(archivePath, Arenas::permanent());
+            if (folder == nullptr) {
+                return nullptr;
+            }
+            void* res = nullptr;
+            const char* foundName = nullptr;
+            if (preferredName != nullptr) {
+                res = folder->getResource(preferredName);
+                if (res != nullptr) foundName = preferredName;
+            }
+            if (res == nullptr) {
+                GameAssets::FolderEntry fe{};
+                for (u32 i = 0; GameAssets::folderEntry(archivePath, i, &fe); ++i) {
+                    if (!fe.mIsFolder && (MR::isEqualSubString(fe.mName, ".bdl") || MR::isEqualSubString(fe.mName, ".bmd"))) {
+                        res = folder->getResource(fe.mName);
+                        foundName = fe.mName;
+                        if (res != nullptr) break;
+                    }
+                }
+            }
+            if (res == nullptr) {
+                return nullptr;
+            }
+            ModelData* pData = ModelData::load(res);
+            if (pData == nullptr) {
+                return nullptr;
+            }
+            pData->setResourceName(foundName != nullptr ? foundName : archivePath);
+            Model* pModel = new (Arenas::permanent(), 0) Model(pData, ModelFlag_None, 1u);
+            nebula_log("[SMG2-3D] Loaded model %s/%s (joints=%u, mats=%u, meshes=%u)",
+                       archivePath, foundName != nullptr ? foundName : "?",
+                       pData->getJointCount(), pData->getMaterialCount(), pData->getMeshCount());
+            return pModel;
+        }
+    }  // namespace
+
+    void mountStageModels(const char* pStageName) {
+        if (sMarioModel == nullptr) {
+            sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bdl");
+            if (sMarioModel == nullptr) {
+                sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bmd");
+            }
+        }
+        if (sStageModelsMounted) {
+            return;
+        }
+        sStageModelsMounted = true;
+
+        // Mount planet/sky models matching the stage prefix (e.g., IslandFleet* for IslandFleetGalaxy)
+        char prefix[64]{};
+        if (pStageName != nullptr) {
+            std::strncpy(prefix, pStageName, sizeof(prefix) - 1u);
+            if (char* g = std::strstr(prefix, "Galaxy")) {
+                *g = '\0';
+            }
+        }
+        if (prefix[0] != '\0') {
+            GameAssets::FolderEntry fe{};
+            for (u32 i = 0; sStageModelCount < kMaxStageModels && GameAssets::folderEntry("/ObjectData", i, &fe); ++i) {
+                if (!fe.mIsFolder) continue;
+                if (MR::isEqualSubString(fe.mName, prefix) &&
+                    (MR::isEqualSubString(fe.mName, "Planet") || MR::isEqualSubString(fe.mName, "Sky") ||
+                     MR::isEqualSubString(fe.mName, "Start") || MR::isEqualSubString(fe.mName, "Island"))) {
+                    char path[128]{};
+                    snprintf(path, sizeof(path), "/ObjectData/%s", fe.mName);
+                    if (Model* m = loadModelFromArchive(path, nullptr)) {
+                        sStageModels[sStageModelCount++] = m;
+                    }
+                }
+            }
+        }
+        nebula_log("[SMG2-3D] Stage '%s' models ready: mario=%p, stageModels=%u",
+                   pStageName != nullptr ? pStageName : "", sMarioModel, sStageModelCount);
+    }
+
+    void begin3DScene(f32 camX, f32 camY, f32 camZ, f32 targetX, f32 targetY, f32 targetZ, f32 fovY, f32 nearZ, f32 farZ) {
+        Point3d camPos = { camX, camY, camZ };
+        Vec upVec = { 0.0f, 1.0f, 0.0f };
+        Point3d targetPos = { targetX, targetY, targetZ };
+        Mtx viewMtx;
+        NebulaMtxLookAt(viewMtx, &camPos, &upVec, &targetPos);
+
+        Mtx44 projMtx;
+        NebulaMtxPerspective(projMtx, fovY, MR::getScreenAspect(), nearZ, farZ);
+
+        Frame::setPerspective(projMtx);
+        Frame::setViewport(0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f);
+        Frame::setScissor(0.0f, 0.0f, 1.0f, 1.0f);
+        Frame::sceneBegin(viewMtx);
+
+        NebulaMtxCopy(viewMtx, ModelSys::mViewMtx);
+        ModelSys::mViewRole = NEBULA_CAMERA_SCENE;
+    }
+
+    static void drawSingleModel(Model* pModel, f32 x, f32 y, f32 z, f32 yawRad) {
+        if (pModel == nullptr || pModel->getModelData() == nullptr) return;
+        Mtx baseMtx;
+        const f32 c = __builtin_cosf(yawRad);
+        const f32 s = __builtin_sinf(yawRad);
+        baseMtx[0][0] = c;    baseMtx[0][1] = 0.0f; baseMtx[0][2] = s;    baseMtx[0][3] = x;
+        baseMtx[1][0] = 0.0f; baseMtx[1][1] = 1.0f; baseMtx[1][2] = 0.0f; baseMtx[1][3] = y;
+        baseMtx[2][0] = -s;   baseMtx[2][1] = 0.0f; baseMtx[2][2] = c;    baseMtx[2][3] = z;
+
+        pModel->setBaseTRMtx(baseMtx);
+        pModel->calc();
+        pModel->viewCalc();
+
+        ModelData* pData = pModel->getModelData();
+        const u32 matCount = pData->getMaterialCount();
+        for (u32 pass = 0; pass < 2u; ++pass) {
+            const bool wantXlu = (pass == 1u);
+            for (u32 i = 0; i < matCount; ++i) {
+                Material* pMat = pModel->getMaterial(i);
+                if (pMat == nullptr || pMat->getMesh() == nullptr || pMat->getMesh()->isHidden()) continue;
+                if (pMat->isTranslucent() != wantXlu) continue;
+                MaterialDraw draw(pMat);
+                draw.draw(pModel, pMat->getMesh());
+            }
+        }
+    }
+
+    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 marioYawRad) {
+        for (u32 i = 0; i < sStageModelCount; ++i) {
+            drawSingleModel(sStageModels[i], 0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        drawSingleModel(sMarioModel, marioX, marioY, marioZ, marioYawRad);
+    }
+
+    void end3DScene() {
+        Frame::opaqueEnd(nullptr);
+        Frame::sceneEnd();
+    }
+}  // namespace Smg23D
 
 // Luma hook release callbacks (unused when Luma runtime hooks are disabled)
 namespace lumacore { void released(const void*, const void*) {} }
