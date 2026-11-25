@@ -34,6 +34,7 @@ namespace Smg2Ui {
     void setPanePos(LayoutManager* pMgr, const char* pPaneName, f32 x, f32 y);
     void setPaneScale(LayoutManager* pMgr, const char* pPaneName, f32 sx, f32 sy);
     void setPaneAnimFrameAndStop(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, f32 frame, u32 layer);
+    void clearPlaceholderTextBoxes(LayoutManager* pMgr);
     void startPaneAnim(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, u32 layer);
     bool isPointingPane(const LayoutManager* pMgr, const char* pPaneName, f32 screenX, f32 screenY);
 }  // namespace Smg2Ui
@@ -126,11 +127,14 @@ namespace {
             Smg2Ui::setTextBoxNumber(tgt, "Star", stars);
             Smg2Ui::setTextBoxNumber(tgt, "StarPiece", 0);
             Smg2Ui::setTextBoxNumber(tgt, "MissCounter", misses);
+            Smg2Ui::setTextBoxMessage(tgt, "TxtDay", u"");
+            Smg2Ui::setTextBoxMessage(tgt, "TxtTime", u"");
             Smg2Ui::setPaneVisible(tgt, "BrosIcon", true);
             Smg2Ui::setPaneVisible(tgt, "TxtMario", !sUseLuigiIcon);
             Smg2Ui::setPaneVisible(tgt, "TxtLuigi", sUseLuigiIcon);
             Smg2Ui::setPaneVisible(tgt, "Complete1", false);
             Smg2Ui::setPaneVisible(tgt, "Complete2", false);
+            Smg2Ui::clearPlaceholderTextBoxes(tgt);
         }
     }
 
@@ -141,6 +145,7 @@ namespace {
         Smg2Ui::setTextBoxNumber(sStarCounterLayout, "TxtStar", GameDataFunction::calcCurrentPowerStarNum());
         Smg2Ui::setTextBoxNumber(sStarPieceCounterLayout, "Counter", sStageStarPieces);
         Smg2Ui::setTextBoxNumber(sStarPieceCounterLayout, "TxtStarPiece", sStageStarPieces);
+        Smg2Ui::setTextBoxNumber(sHitPointMeterLayout, "HitPointNumber", sStageLife);
         Smg2Ui::setTextBoxNumber(sHitPointMeterLayout, "Counter", sStageLife);
     }
 }  // namespace
@@ -206,8 +211,14 @@ void GameScene::enterFileSelect() {
             sFileNumberLayouts[i] = Smg2Ui::createLayout("FileNumber", true, 2u, 0u, true);
         }
         Smg2Ui::setTextBoxNumber(sFileNumberLayouts[i], "FileNumber", i + 1);
-        Smg2Ui::setPanePos(sFileNumberLayouts[i], nullptr, static_cast<f32>((i - 1) * 180), 40.0f);
+        Smg2Ui::setPanePos(sFileNumberLayouts[i], nullptr, static_cast<f32>((i - 1) * 180), -135.0f);
         Smg2Ui::startRootAnimFallback(sFileNumberLayouts[i], "Appear", "Wait", 0u);
+    }
+    static const char* const kUnusedInfoPanes[] = {
+        "Complete1", "Complete2", "PicPeach", "PicRosetta", "PicKinopio", "PicYoshi", "PicLuigi", "PicMii"
+    };
+    for (const char* pName : kUnusedInfoPanes) {
+        Smg2Ui::setPaneVisible(sFileInfoLayout, pName, false);
     }
     if (sPointerLayout == nullptr) {
         sPointerLayout = Smg2Ui::createLayout("DPDPointer", true, 1u, 0u, true);
@@ -255,8 +266,9 @@ void GameScene::enterStage(const char* pStageName) {
     if (sCoinCounterLayout == nullptr) sCoinCounterLayout = Smg2Ui::createLayout("CoinCounter", true, 1u, 0u, true);
     if (sStarCounterLayout == nullptr) sStarCounterLayout = Smg2Ui::createLayout("StarCounter", true, 1u, 0u, true);
     if (sStarPieceCounterLayout == nullptr) sStarPieceCounterLayout = Smg2Ui::createLayout("StarPieceCounter", true, 1u, 0u, true);
-    Smg2Ui::startRootAnimFallback(sHitPointMeterLayout, "Appear", "Wait", 0u);
+    Smg2Ui::setPaneAnimFrameAndStop(sHitPointMeterLayout, nullptr, "ShowHide", 20.0f, 1u);
     Smg2Ui::setPaneAnimFrameAndStop(sHitPointMeterLayout, "HitPointMeter", "Count", static_cast<f32>(sStageLife), 0u);
+    Smg2Ui::setTextBoxNumber(sHitPointMeterLayout, "HitPointNumber", sStageLife);
     Smg2Ui::startRootAnimFallback(sCoinCounterLayout, "Appear", "Wait", 0u);
     Smg2Ui::startRootAnimFallback(sStarCounterLayout, "Appear", "Wait", 0u);
     Smg2Ui::startRootAnimFallback(sStarPieceCounterLayout, "Appear", "Wait", 0u);

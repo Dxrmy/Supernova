@@ -22,6 +22,7 @@ public:
 
 private:
     TVec3f mPos;
+    TVec3f mSafeSpawnPos;
     TVec3f mVel;
     TVec3f mGravity;
     TVec3f mUp;

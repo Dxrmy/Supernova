@@ -583,9 +583,11 @@ namespace Smg2Ui {
         }
     }
     void setPaneAnimFrameAndStop(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, f32 frame, u32 layer) {
-        if (pMgr == nullptr || pPaneName == nullptr || pAnimName == nullptr) return;
+        if (pMgr == nullptr || pAnimName == nullptr) return;
         if (pMgr->getAnimTransform(pAnimName) == nullptr) return;
-        LayoutPaneCtrl* pCtrl = pMgr->createAndAddPaneCtrl(pPaneName, layer + 1u);
+        LayoutPaneCtrl* pCtrl = (pPaneName != nullptr)
+                                    ? pMgr->createAndAddPaneCtrl(pPaneName, layer + 1u)
+                                    : pMgr->createAndAddRootPaneCtrl(layer + 1u);
         if (pCtrl != nullptr) {
             pCtrl->start(pAnimName, layer);
             if (FrameCtrl* pFc = pCtrl->getFrameCtrl(layer)) {
@@ -593,6 +595,23 @@ namespace Smg2Ui {
                 pFc->setRate(0.0f);
             }
         }
+    }
+    static void clearPlaceholderTextBoxesImpl(Ui::Pane* pPane) {
+        if (pPane == nullptr) return;
+        if (Ui::TextBox* pTb = Ui::PaneCast<Ui::TextBox>(pPane)) {
+            const char16_t* s = pTb->mTextBuf;
+            if (s != nullptr && s[0] == u'X' && s[1] == u'X') {
+                LayoutCoreUtil::setTextBoxMessage(pTb, u"");
+                pTb->SetVisible(false);
+            }
+        }
+        for (Ui::Pane* pChild : pPane->mChildList) {
+            clearPlaceholderTextBoxesImpl(pChild);
+        }
+    }
+    void clearPlaceholderTextBoxes(LayoutManager* pMgr) {
+        if (pMgr == nullptr || pMgr->mLayout == nullptr || pMgr->mLayout->mpRootPane == nullptr) return;
+        clearPlaceholderTextBoxesImpl(pMgr->mLayout->mpRootPane);
     }
     void startPaneAnim(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, u32 layer) {
         if (pMgr == nullptr || pPaneName == nullptr || pAnimName == nullptr) return;
@@ -871,7 +890,7 @@ namespace Smg23D {
                 const f32 pen = radius - dists[h];
                 if (pen > 0.0f) {
                     const Vec3f* n = srv->getFaceNormal(prisms[h]);
-                    if (n != nullptr && (!topSurfaceOnly || n->y > 0.2f)) {
+                    if (n != nullptr && (!topSurfaceOnly || n->y > 0.05f)) {
                         center.x += n->x * pen;
                         center.y += n->y * pen;
                         center.z += n->z * pen;
@@ -918,7 +937,7 @@ namespace Smg23D {
                     const s32 triIdx = srv->toIndex(prisms[i]);
                     if (triIdx < 0 || triIdx >= srv->getTriangleNum()) continue;
                     const Vec3f* n = srv->getFaceNormal(prisms[i]);
-                    if (topSurfaceOnly && (n == nullptr || n->y <= 0.2f)) continue;
+                    if (topSurfaceOnly && (n == nullptr || n->y <= 0.05f)) continue;
                     if (dists[i] >= 0.0f && dists[i] < bestT) {
                         bestT = dists[i];
                         if (n != nullptr) {
@@ -1036,14 +1055,7 @@ namespace Smg23D {
                 drawSingleModel(m, sCollectibles[c].x, sCollectibles[c].y, sCollectibles[c].z, spin + static_cast<f32>(c) * 0.5f);
             }
         }
-        if (sMarioShadowModel != nullptr && sMarioShadowModel->getModelData() != nullptr) {
-            f32 sx = marioX, sy = marioY, sz = marioZ;
-            f32 snx = upX, sny = upY, snz = upZ;
-            if (raycastPlanet(marioX + upX * 50.0f, marioY + upY * 50.0f, marioZ + upZ * 50.0f,
-                              -upX, -upY, -upZ, 2000.0f, &sx, &sy, &sz, &snx, &sny, &snz)) {
-                drawSingleModel(sMarioShadowModel, sx + snx * 2.0f, sy + sny * 2.0f, sz + snz * 2.0f, marioYawRad);
-            }
-        }
+        // MarioShadow is a Wii stencil shadow-volume mesh; skip opaque draw until stencil shadow passes are implemented.
         if (sMarioModel == nullptr || sMarioModel->getModelData() == nullptr) {
             return;
         }

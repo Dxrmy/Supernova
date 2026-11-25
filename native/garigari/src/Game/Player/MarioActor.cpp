@@ -27,6 +27,7 @@ namespace {
 
 MarioActor::MarioActor()
     : mPos(0.0f, 1600.0f, 0.0f),
+      mSafeSpawnPos(0.0f, 1600.0f, 0.0f),
       mVel(0.0f, 0.0f, 0.0f),
       mGravity(0.0f, -1.0f, 0.0f),
       mUp(0.0f, 1.0f, 0.0f),
@@ -51,7 +52,7 @@ void MarioActor::init(const char* pStageName) {
         mUsePlanarGravity = false;
     }
 
-    // Snap initial spawn onto top deck KCL surface (normal.y > 0.2f when planar/disc)
+    // Snap initial spawn onto top deck KCL surface (normal.y > 0.05f when planar/disc)
     f32 hx = 0.0f, hy = 0.0f, hz = 0.0f, nx = 0.0f, ny = 1.0f, nz = 0.0f;
     if (Smg23D::raycastPlanet(mPos.x, mPos.y + 400.0f, mPos.z, 0.0f, -1.0f, 0.0f, 4000.0f,
                               &hx, &hy, &hz, &nx, &ny, &nz, mUsePlanarGravity)) {
@@ -59,6 +60,7 @@ void MarioActor::init(const char* pStageName) {
         mUp.set(nx, ny, nz);
         mGrounded = true;
     }
+    mSafeSpawnPos = mPos;
     nebula_log("[SMG2-PLAYER] MarioActor::init(stage='%s', planar=%d) spawn=(%.1f, %.1f, %.1f) grounded=%d",
                pStageName != nullptr ? pStageName : "", mUsePlanarGravity ? 1 : 0, mPos.x, mPos.y, mPos.z, mGrounded ? 1 : 0);
 }
@@ -131,6 +133,15 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
         mVel.z += mGravity.z * 1.4f;
     }
 
+    const TVec3f prevPos = mPos;
+    // Clamp fall speed to prevent KCL tunneling
+    const f32 vFall = mVel.x * mGravity.x + mVel.y * mGravity.y + mVel.z * mGravity.z;
+    if (vFall > 35.0f) {
+        const f32 excess = vFall - 35.0f;
+        mVel.x -= mGravity.x * excess;
+        mVel.y -= mGravity.y * excess;
+        mVel.z -= mGravity.z * excess;
+    }
     mPos.x += mVel.x;
     mPos.y += mVel.y;
     mPos.z += mVel.z;
@@ -151,10 +162,12 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
             mGrounded = true;
         }
     } else {
-        // Check short downward ray for gentle curved slopes
+        // Swept downward raycast from previous position to prevent seam/fall-through tunneling
         f32 hx = 0.0f, hy = 0.0f, hz = 0.0f;
-        if (mGrounded && Smg23D::raycastPlanet(mPos.x + mUp.x * 40.0f, mPos.y + mUp.y * 40.0f, mPos.z + mUp.z * 40.0f,
-                                               -mUp.x, -mUp.y, -mUp.z, 90.0f, &hx, &hy, &hz, &nx, &ny, &nz, mUsePlanarGravity)) {
+        const f32 vnGravity = mVel.x * mGravity.x + mVel.y * mGravity.y + mVel.z * mGravity.z;
+        if ((mGrounded || vnGravity >= 0.0f) &&
+            Smg23D::raycastPlanet(prevPos.x + mUp.x * 50.0f, prevPos.y + mUp.y * 50.0f, prevPos.z + mUp.z * 50.0f,
+                                  -mUp.x, -mUp.y, -mUp.z, 160.0f, &hx, &hy, &hz, &nx, &ny, &nz, mUsePlanarGravity)) {
             mPos.set(hx, hy, hz);
             mUp.set(nx, ny, nz);
             const f32 vn = mVel.x * nx + mVel.y * ny + mVel.z * nz;
@@ -163,9 +176,19 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
                 mVel.y -= ny * vn;
                 mVel.z -= nz * vn;
             }
+            mGrounded = true;
         } else {
             mGrounded = false;
         }
+    }
+
+    // Void fall kill plane & respawn
+    if (mUsePlanarGravity && mPos.y < -1500.0f) {
+        mPos = mSafeSpawnPos;
+        mVel.set(0.0f, 0.0f, 0.0f);
+        mUp.set(0.0f, 1.0f, 0.0f);
+        mGrounded = true;
+        nebula_log("[SMG2-PLAYER] Void fall respawn -> (%.1f, %.1f, %.1f)", mPos.x, mPos.y, mPos.z);
     }
 
     if (!mGrounded) {
