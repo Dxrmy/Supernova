@@ -588,15 +588,27 @@ namespace Smg23D {
         XanimeCore* sMarioAnimCore = nullptr;
         Clip* sMarioClips[3]{};  // 0=Wait, 1=Run, 2=Jump
         int sMarioAnimState = 0;
+        f32 sMarioAnimRate = 1.0f;
 
         constexpr u32 kMaxStageModels = 16;
         Model* sStageModels[kMaxStageModels]{};
         u32 sStageModelCount = 0;
         Model* sSkyModel = nullptr;
+        Model* sMenuShipModel = nullptr;
+        Model* sCoinModel = nullptr;
+        Model* sStarPieceModel = nullptr;
+        struct CollectiblePos {
+            f32 x, y, z;
+            bool isCoin;
+        };
+        constexpr u32 kMaxCollectibles = 8;
+        CollectiblePos sCollectibles[kMaxCollectibles]{};
+        u32 sCollectibleCount = 0;
         KCollisionServer* sKclServers[kMaxStageModels]{};
         u32 sKclCount = 0;
         f32 sCamPosX = 0.0f, sCamPosY = 0.0f, sCamPosZ = 0.0f;
         bool sStageModelsMounted = false;
+        bool sMenuBackdropMounted = false;
 
         Clip* loadClipFromArchive(const char* archivePath, const char* const* names, u32 nameCount, const ModelData* pModelData) {
             if (GameAssets::find(archivePath) < 0) return nullptr;
@@ -671,19 +683,50 @@ namespace Smg23D {
         }
     }  // namespace
 
+    bool raycastPlanet(f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz, f32 maxDist,
+                       f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz);
+
+    void mountMenuBackdrop() {
+        if (sMenuBackdropMounted) return;
+        sMenuBackdropMounted = true;
+        if (sSkyModel == nullptr) {
+            static const char* const kMenuSkies[] = {
+                "/ObjectData/StarrySky",
+                "/ObjectData/MilkyWaySky",
+                "/ObjectData/IslandFleetSky",
+                "/ObjectData/BlueSky",
+            };
+            for (const char* skyPath : kMenuSkies) {
+                if ((sSkyModel = loadModelFromArchive(skyPath, nullptr, false)) != nullptr) {
+                    break;
+                }
+            }
+        }
+        if (sMenuShipModel == nullptr) {
+            sMenuShipModel = loadModelFromArchive("/ObjectData/MarioFaceShipPlanet", nullptr, false);
+            if (sMenuShipModel == nullptr) {
+                sMenuShipModel = loadModelFromArchive("/ObjectData/MarioFacePlanet", nullptr, false);
+            }
+        }
+        nebula_log("[SMG2-3D] Menu backdrop ready: sky=%p, ship=%p", sSkyModel, sMenuShipModel);
+    }
+
     void mountStageModels(const char* pStageName) {
+        mountMenuBackdrop();
         if (sMarioModel == nullptr) {
+            GameAssets::FolderEntry mfe{};
+            for (u32 i = 0; i < 30u && GameAssets::folderEntry("/ObjectData/Mario", i, &mfe); ++i) {
+                nebula_log("[SMG2-3D] /ObjectData/Mario[%u]: %s", i, mfe.mName);
+            }
+            for (u32 i = 0; i < 30u && GameAssets::folderEntry("/ObjectData/MarioAnime", i, &mfe); ++i) {
+                nebula_log("[SMG2-3D] /ObjectData/MarioAnime[%u]: %s", i, mfe.mName);
+            }
             sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bdl", false);
             if (sMarioModel == nullptr) {
                 sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bmd", false);
             }
             if (sMarioModel != nullptr && sMarioModel->getModelData() != nullptr) {
                 ModelData* pMarioData = sMarioModel->getModelData();
-                sMarioAnimCore = new (Arenas::permanent(), 0) XanimeCore(pMarioData->getJointCount(), 1u, pMarioData->getScaleMode());
-                sMarioAnimCore->enableJointTransform(pMarioData);
-                for (u32 j = 0; j < pMarioData->getJointCount(); ++j) {
-                    pMarioData->getJointAt(j)->setMtxCalc(sMarioAnimCore);
-                }
                 static const char* const kWaitNames[] = { "Wait.bck", "Wait.bca", "wait.bck" };
                 static const char* const kRunNames[] = { "Run.bck", "Dash.bck", "Walk.bck", "Run.bca" };
                 static const char* const kJumpNames[] = { "Jump.bck", "JumpStart.bck", "Fall.bck", "Jump.bca" };
@@ -694,7 +737,14 @@ namespace Smg23D {
                 sMarioClips[2] = loadClipFromArchive("/ObjectData/Mario", kJumpNames, 4u, pMarioData);
                 if (sMarioClips[2] == nullptr) sMarioClips[2] = loadClipFromArchive("/ObjectData/MarioAnime", kJumpNames, 4u, pMarioData);
                 if (sMarioClips[0] != nullptr) {
+                    sMarioAnimCore = new (Arenas::permanent(), 0) XanimeCore(pMarioData->getJointCount(), 1u, pMarioData->getScaleMode());
+                    sMarioAnimCore->enableJointTransform(pMarioData);
+                    for (u32 j = 0; j < pMarioData->getJointCount(); ++j) {
+                        pMarioData->getJointAt(j)->setMtxCalc(sMarioAnimCore);
+                    }
                     sMarioAnimCore->setBck(0u, sMarioClips[0]);
+                } else {
+                    nebula_log("[SMG2-3D] No Mario BCK clips loaded; keeping default bind pose MtxCalc");
                 }
             }
         }
@@ -742,8 +792,23 @@ namespace Smg23D {
                 }
             }
         }
-        nebula_log("[SMG2-3D] Stage '%s' ready: mario=%p, stageModels=%u, kcl=%u, sky=%p",
-                   pStageName != nullptr ? pStageName : "", sMarioModel, sStageModelCount, sKclCount, sSkyModel);
+        if (sCoinModel == nullptr) {
+            sCoinModel = loadModelFromArchive("/ObjectData/Coin", nullptr, false);
+        }
+        if (sStarPieceModel == nullptr) {
+            sStarPieceModel = loadModelFromArchive("/ObjectData/StarPiece", nullptr, false);
+        }
+        sCollectibleCount = 0;
+        for (u32 c = 0; c < kMaxCollectibles; ++c) {
+            const f32 ang = static_cast<f32>(c) * (6.283185f / static_cast<f32>(kMaxCollectibles));
+            const f32 rx = 350.0f * __builtin_cosf(ang);
+            const f32 rz = 350.0f * __builtin_sinf(ang);
+            f32 hx = rx, hy = 1050.0f, hz = rz;
+            raycastPlanet(rx, 2000.0f, rz, 0.0f, -1.0f, 0.0f, 4000.0f, &hx, &hy, &hz, nullptr, nullptr, nullptr);
+            sCollectibles[sCollectibleCount++] = CollectiblePos{ hx, hy + 60.0f, hz, (c % 2u) == 0u };
+        }
+        nebula_log("[SMG2-3D] Stage '%s' ready: mario=%p, stageModels=%u, kcl=%u, sky=%p, coin=%p, starPiece=%p",
+                   pStageName != nullptr ? pStageName : "", sMarioModel, sStageModelCount, sKclCount, sSkyModel, sCoinModel, sStarPieceModel);
     }
 
     bool resolveSphereCollision(f32* ioX, f32* ioY, f32* ioZ, f32 radius, f32* outNormalX, f32* outNormalY, f32* outNormalZ) {
@@ -824,8 +889,9 @@ namespace Smg23D {
         return found;
     }
 
-    void setMarioAnim(int animState) {
+    void setMarioAnim(int animState, f32 speedScale) {
         if (animState < 0 || animState >= 3) animState = 0;
+        sMarioAnimRate = (animState == 1) ? (0.6f + speedScale * 0.9f) : 1.0f;
         if (sMarioAnimState != animState) {
             sMarioAnimState = animState;
             if (sMarioAnimCore != nullptr && sMarioClips[animState] != nullptr) {
@@ -887,20 +953,43 @@ namespace Smg23D {
         drawModelWithMtx(pModel, baseMtx);
     }
 
-    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 upX, f32 upY, f32 upZ, f32 marioYawRad) {
-        if (sSkyModel != nullptr) {
+    void drawMenuBackdrop(u32 step) {
+        if (sSkyModel != nullptr && sSkyModel->getModelData() != nullptr) {
+            drawSingleModel(sSkyModel, sCamPosX, sCamPosY, sCamPosZ, static_cast<f32>(step) * 0.002f);
+        }
+        if (sMenuShipModel != nullptr && sMenuShipModel->getModelData() != nullptr) {
+            drawSingleModel(sMenuShipModel, 0.0f, -200.0f, 0.0f, static_cast<f32>(step) * 0.004f);
+        }
+    }
+
+    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 upX, f32 upY, f32 upZ, f32 marioYawRad, u32 step) {
+        if (sSkyModel != nullptr && sSkyModel->getModelData() != nullptr) {
             drawSingleModel(sSkyModel, sCamPosX, sCamPosY, sCamPosZ, 0.0f);
         }
         for (u32 i = 0; i < sStageModelCount; ++i) {
-            drawSingleModel(sStageModels[i], 0.0f, 0.0f, 0.0f, 0.0f);
-        }
-        if (sMarioClips[sMarioAnimState] != nullptr) {
-            Clip* clip = sMarioClips[sMarioAnimState];
-            f32 nextFrame = clip->getFrame() + 1.0f;
-            if (nextFrame >= static_cast<f32>(clip->getFrameMax())) {
-                nextFrame = 0.0f;
+            if (sStageModels[i] != nullptr && sStageModels[i]->getModelData() != nullptr) {
+                drawSingleModel(sStageModels[i], 0.0f, 0.0f, 0.0f, 0.0f);
             }
-            clip->setFrame(nextFrame);
+        }
+        const f32 spin = static_cast<f32>(step) * 0.05f;
+        for (u32 c = 0; c < sCollectibleCount; ++c) {
+            Model* m = sCollectibles[c].isCoin ? sCoinModel : sStarPieceModel;
+            if (m != nullptr && m->getModelData() != nullptr) {
+                drawSingleModel(m, sCollectibles[c].x, sCollectibles[c].y, sCollectibles[c].z, spin + static_cast<f32>(c) * 0.5f);
+            }
+        }
+        if (sMarioModel == nullptr || sMarioModel->getModelData() == nullptr) {
+            return;
+        }
+        if (sMarioAnimCore != nullptr && sMarioAnimState >= 0 && sMarioAnimState < 3 && sMarioClips[sMarioAnimState] != nullptr) {
+            Clip* clip = sMarioClips[sMarioAnimState];
+            if (clip->getFrameMax() > 0) {
+                f32 nextFrame = clip->getFrame() + sMarioAnimRate;
+                if (nextFrame >= static_cast<f32>(clip->getFrameMax())) {
+                    nextFrame = 0.0f;
+                }
+                clip->setFrame(nextFrame);
+            }
         }
         // Build Mario orientation matrix from surface normal (up) and heading (marioYawRad)
         f32 ux = upX, uy = upY, uz = upZ;

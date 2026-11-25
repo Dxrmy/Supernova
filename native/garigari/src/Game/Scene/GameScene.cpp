@@ -36,10 +36,12 @@ namespace Smg2Ui {
 }  // namespace Smg2Ui
 
 namespace Smg23D {
+    void mountMenuBackdrop();
     void mountStageModels(const char* pStageName);
-    void setMarioAnim(int animState);
+    void setMarioAnim(int animState, f32 speedScale);
     void begin3DScene(f32 camX, f32 camY, f32 camZ, f32 targetX, f32 targetY, f32 targetZ, f32 fovY, f32 nearZ, f32 farZ);
-    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 upX, f32 upY, f32 upZ, f32 marioYawRad);
+    void drawMenuBackdrop(u32 step);
+    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 upX, f32 upY, f32 upZ, f32 marioYawRad, u32 step);
     void end3DScene();
 }  // namespace Smg23D
 
@@ -132,6 +134,7 @@ void GameScene::init() {
     }
     sTitleWaitStarted = false;
     sPressStartWaitStarted = false;
+    Smg23D::mountMenuBackdrop();
     Smg2Ui::startRootAnim(sTitleLogoLayout, "Appear", 0u);
     Smg2Ui::startRootAnim(sPressStartLayout, "Appear", 0u);
     nebula_log("[SMG2-SCENE] GameScene::init() -> Title Screen (real NLYT/NLAN TitleLogo + PressStart)");
@@ -280,14 +283,16 @@ void GameScene::update() {
                 mActiveStage = "Title";
                 sTitleWaitStarted = false;
                 sPressStartWaitStarted = false;
-                Smg2Ui::startRootAnim(sTitleLogoLayout, "Appear", 0u);
+                Smg23D::mountMenuBackdrop();
+    Smg2Ui::startRootAnim(sTitleLogoLayout, "Appear", 0u);
                 Smg2Ui::startRootAnim(sPressStartLayout, "Appear", 0u);
             }
         }
     } else {
         sCameraDirector.update(stickX, stickY);
         sMarioActor.update(stickX, stickY, buttons, sStageGravity);
-        Smg23D::setMarioAnim(sMarioActor.getAnimState());
+        const f32 stickMag = __builtin_sqrtf(stickX * stickX + stickY * stickY);
+        Smg23D::setMarioAnim(sMarioActor.getAnimState(), stickMag);
     }
 }
 
@@ -302,9 +307,17 @@ void GameScene::calcAnim() {
 
 void GameScene::draw() const {
     if (mPhase == Phase_Title) {
+        const f32 ang = static_cast<f32>(mPhaseSteps) * 0.005f;
+        Smg23D::begin3DScene(2200.0f * __builtin_sinf(ang), 400.0f, 2200.0f * __builtin_cosf(ang), 0.0f, 0.0f, 0.0f, 55.0f, 10.0f, 100000.0f);
+        Smg23D::drawMenuBackdrop(static_cast<u32>(mPhaseSteps));
+        Smg23D::end3DScene();
         Smg2Ui::drawLayout(sTitleLogoLayout);
         Smg2Ui::drawLayout(sPressStartLayout);
     } else if (mPhase == Phase_FileSelect) {
+        const f32 ang = static_cast<f32>(mPhaseSteps) * 0.005f;
+        Smg23D::begin3DScene(2200.0f * __builtin_sinf(ang), 400.0f, 2200.0f * __builtin_cosf(ang), 0.0f, 0.0f, 0.0f, 55.0f, 10.0f, 100000.0f);
+        Smg23D::drawMenuBackdrop(static_cast<u32>(mPhaseSteps));
+        Smg23D::end3DScene();
         Smg2Ui::drawLayout(sFileSelectLayout);
     } else {
         const TVec3f& pos = sMarioActor.getPosition();
@@ -315,7 +328,7 @@ void GameScene::draw() const {
         const f32 camY = pos.y + up.y * 400.0f;
         const f32 camZ = pos.z + camDist * __builtin_cosf(yaw) + up.z * 400.0f;
         Smg23D::begin3DScene(camX, camY, camZ, pos.x + up.x * 100.0f, pos.y + up.y * 100.0f, pos.z + up.z * 100.0f, 60.0f, 10.0f, 100000.0f);
-        Smg23D::drawStageAndMario(pos.x, pos.y, pos.z, up.x, up.y, up.z, sMarioActor.getYaw());
+        Smg23D::drawStageAndMario(pos.x, pos.y, pos.z, up.x, up.y, up.z, sMarioActor.getYaw(), static_cast<u32>(mPhaseSteps));
         Smg23D::end3DScene();
     }
 }

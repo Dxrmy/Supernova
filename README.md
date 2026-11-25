@@ -27,6 +27,18 @@ Supernova uses a **Hybrid Native-First** approach: reconstructing missing SMG2 s
 **Work in Progress:**
 - *Super Mario Galaxy 2* has over 50,000 functions across 49 galaxies, Yoshi/power-up mechanics, Starship Mario / World Map events, enemies, bosses, and cutscenes. Systems outside the current bring-up remain stubbed with `TODO(Garigari)` diagnostic markers for incremental reconstruction.
 
+### Project Completion Status
+
+**Overall Progress:** `[███████░░░░░░░░░░░░░] 35%`
+
+| Subsystem | Progress | Verified Status |
+| --- | --- | --- |
+| **1. Engine Runtime & Host** *(ISO Cooker, DX12 Swapchain, Audio Clock, Save I/O)* | `85%` | `nebula-import` (`SB4E01`), D3D12 `Nebula.exe`, 180 Hz audio clock, `NBSV` v4 save I/O |
+| **2. 2D UI & Fonts** *(NLYT / NLAN Layouts, NFNT / CharWriter Fonts, MSBT Localization)* | `75%` | `TitleLogo`, `PressStart`, `FileSelect` `NLYT`/`NLAN`, `NFNT` fonts, 814 `MSBT` strings, interactive slots/hover/confirm |
+| **3. 3D Renderer & Shaders** *(D3D12 Pipelines, J3D Models, Materials, Skyboxes)* | `45%` | 5,539 `NBPIPEL2` pipelines, `ModelData`/`Model`/`MaterialDraw`, `MilkyWaySky`, `MarioFaceShipPlanet`, `Coin`/`StarPiece` |
+| **4. Physics & Character Control** *(KCL Collision, Spherical Gravity, Skeletal BCK Animations)* | `30%` | `PlanetGravityManager`, `KCollisionServer` sphere/raycast alignment, Gram-Schmidt orientation, `XanimeCore` BCK hooks |
+| **5. Game Content & Scenarios** *(Galaxies, Yoshi, Actors, Bosses, Cutscenes)* | `5%` | 62 scenario archives parsed, `IslandFleetGalaxy` / `MarioFaceShipGalaxy` bring-up; full actors/Yoshi/bosses pending |
+
 ---
 
 ## Prerequisites (Windows x64)
