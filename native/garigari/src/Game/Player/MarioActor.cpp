@@ -65,7 +65,7 @@ void MarioActor::init(const char* pStageName) {
                pStageName != nullptr ? pStageName : "", mUsePlanarGravity ? 1 : 0, mPos.x, mPos.y, mPos.z, mGrounded ? 1 : 0);
 }
 
-void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManager* pGravityMgr) {
+void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManager* pGravityMgr, f32 camYaw) {
     if (mUsePlanarGravity) {
         mGravity.set(0.0f, -1.0f, 0.0f);
     } else if (pGravityMgr != nullptr) {
@@ -87,34 +87,34 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
     mUp.z += (targetUp.z - mUp.z) * 0.25f;
     normalizeVec3(mUp, targetUp);
 
-    // Build tangent basis orthogonal to mUp
-    TVec3f refFwd(__builtin_sinf(mYaw), 0.0f, __builtin_cosf(mYaw));
-    // Project refFwd onto plane perpendicular to mUp
-    const f32 dotFU = refFwd.x * mUp.x + refFwd.y * mUp.y + refFwd.z * mUp.z;
-    TVec3f fwd(refFwd.x - mUp.x * dotFU, refFwd.y - mUp.y * dotFU, refFwd.z - mUp.z * dotFU);
-    if (fwd.x * fwd.x + fwd.y * fwd.y + fwd.z * fwd.z < 1.0e-4f) {
-        fwd.set(0.0f, 0.0f, 1.0f);
-        const f32 d2 = fwd.x * mUp.x + fwd.y * mUp.y + fwd.z * mUp.z;
-        fwd.set(fwd.x - mUp.x * d2, fwd.y - mUp.y * d2, fwd.z - mUp.z * d2);
-    }
-    normalizeVec3(fwd, TVec3f(0.0f, 0.0f, 1.0f));
-    // right = fwd x mUp
-    TVec3f right(fwd.y * mUp.z - fwd.z * mUp.y,
-                 fwd.z * mUp.x - fwd.x * mUp.z,
-                 fwd.x * mUp.y - fwd.y * mUp.x);
-    normalizeVec3(right, TVec3f(1.0f, 0.0f, 0.0f));
-
-    const f32 stickMag = __builtin_sqrtf(stickX * stickX + stickY * stickY);
+    const f32 stickMagRaw = __builtin_sqrtf(stickX * stickX + stickY * stickY);
+    const f32 stickMag = (stickMagRaw > 1.0f) ? 1.0f : stickMagRaw;
     const f32 moveSpeed = 14.0f;
     const f32 vUp = mVel.x * mUp.x + mVel.y * mUp.y + mVel.z * mUp.z;
 
     if (stickMag > 0.1f) {
-        mYaw = __builtin_atan2f(stickX, -stickY);
-        const f32 sx = stickX * moveSpeed;
-        const f32 sz = -stickY * moveSpeed;
-        mVel.x = mUp.x * vUp + (right.x * sx + fwd.x * sz);
-        mVel.y = mUp.y * vUp + (right.y * sx + fwd.y * sz);
-        mVel.z = mUp.z * vUp + (right.z * sx + fwd.z * sz);
+        // Camera-relative world direction (camYaw=0 places camera at +Z looking toward -Z)
+        const f32 cosY = __builtin_cosf(camYaw);
+        const f32 sinY = __builtin_sinf(camYaw);
+        const f32 worldX = stickX * cosY - stickY * sinY;
+        const f32 worldZ = -stickX * sinY - stickY * cosY;
+
+        // Project onto surface tangent plane perpendicular to mUp
+        const f32 dotU = worldX * mUp.x + worldZ * mUp.z;
+        TVec3f moveDir(worldX - mUp.x * dotU, -mUp.y * dotU, worldZ - mUp.z * dotU);
+        normalizeVec3(moveDir, TVec3f(worldX, 0.0f, worldZ));
+
+        // Smoothly rotate Mario's facing yaw toward movement direction
+        const f32 targetYaw = __builtin_atan2f(moveDir.x, moveDir.z);
+        f32 diff = targetYaw - mYaw;
+        while (diff > 3.14159265f) diff -= 6.2831853f;
+        while (diff < -3.14159265f) diff += 6.2831853f;
+        mYaw += diff * 0.25f;
+
+        const f32 speed = stickMag * moveSpeed;
+        mVel.x = mUp.x * vUp + moveDir.x * speed;
+        mVel.y = mUp.y * vUp + moveDir.y * speed;
+        mVel.z = mUp.z * vUp + moveDir.z * speed;
     } else {
         mVel.x = mUp.x * vUp;
         mVel.y = mUp.y * vUp;
@@ -133,7 +133,6 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
         mVel.z += mGravity.z * 1.4f;
     }
 
-    const TVec3f prevPos = mPos;
     // Clamp fall speed to prevent KCL tunneling
     const f32 vFall = mVel.x * mGravity.x + mVel.y * mGravity.y + mVel.z * mGravity.z;
     if (vFall > 35.0f) {
@@ -162,13 +161,16 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
             mGrounded = true;
         }
     } else {
-        // Swept downward raycast from previous position to prevent seam/fall-through tunneling
+        // Raycast downward at the NEW horizontal position (mPos) and adjust ONLY altitude along mUp
         f32 hx = 0.0f, hy = 0.0f, hz = 0.0f;
         const f32 vnGravity = mVel.x * mGravity.x + mVel.y * mGravity.y + mVel.z * mGravity.z;
         if ((mGrounded || vnGravity >= 0.0f) &&
-            Smg23D::raycastPlanet(prevPos.x + mUp.x * 50.0f, prevPos.y + mUp.y * 50.0f, prevPos.z + mUp.z * 50.0f,
+            Smg23D::raycastPlanet(mPos.x + mUp.x * 55.0f, mPos.y + mUp.y * 55.0f, mPos.z + mUp.z * 55.0f,
                                   -mUp.x, -mUp.y, -mUp.z, 160.0f, &hx, &hy, &hz, &nx, &ny, &nz, mUsePlanarGravity)) {
-            mPos.set(hx, hy, hz);
+            const f32 altDelta = (hx - mPos.x) * mUp.x + (hy - mPos.y) * mUp.y + (hz - mPos.z) * mUp.z;
+            mPos.x += mUp.x * altDelta;
+            mPos.y += mUp.y * altDelta;
+            mPos.z += mUp.z * altDelta;
             mUp.set(nx, ny, nz);
             const f32 vn = mVel.x * nx + mVel.y * ny + mVel.z * nz;
             if (vn < 0.0f) {

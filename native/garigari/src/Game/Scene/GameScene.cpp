@@ -69,6 +69,8 @@ namespace {
     LayoutManager* sStarCounterLayout = nullptr;
     LayoutManager* sStarPieceCounterLayout = nullptr;
     bool sHasPointer = false;
+    f32 sPrevPtrX = 0.0f;
+    f32 sPrevPtrY = 0.0f;
     bool sTitleWaitStarted = false;
     bool sPressStartWaitStarted = false;
     bool sFileSelectWaitStarted = false;
@@ -211,7 +213,7 @@ void GameScene::enterFileSelect() {
             sFileNumberLayouts[i] = Smg2Ui::createLayout("FileNumber", true, 2u, 0u, true);
         }
         Smg2Ui::setTextBoxNumber(sFileNumberLayouts[i], "FileNumber", i + 1);
-        Smg2Ui::setPanePos(sFileNumberLayouts[i], nullptr, static_cast<f32>((i - 1) * 180), -135.0f);
+        Smg2Ui::setPanePos(sFileNumberLayouts[i], nullptr, static_cast<f32>(i * 150 - 240), -135.0f);
         Smg2Ui::startRootAnimFallback(sFileNumberLayouts[i], "Appear", "Wait", 0u);
     }
     static const char* const kUnusedInfoPanes[] = {
@@ -336,7 +338,12 @@ void GameScene::update() {
             sFileSelectWaitStarted = true;
             Smg2Ui::startRootAnimFallback(sFileSelectLayout, "Wait", "Loop", 0u);
         }
-        if (hasPtr && !sConfirmOpen && !sEraseConfirm) {
+        const bool ptrMoved = hasPtr && ((ptrX - sPrevPtrX) * (ptrX - sPrevPtrX) + (ptrY - sPrevPtrY) * (ptrY - sPrevPtrY) > 4.0f);
+        if (ptrMoved) {
+            sPrevPtrX = ptrX;
+            sPrevPtrY = ptrY;
+        }
+        if (hasPtr && (ptrMoved || (pressed & NEBULA_BUTTON_A) != 0u) && !sConfirmOpen && !sEraseConfirm) {
             if (Smg2Ui::isPointingPane(sFileSelectLayout, "PicMii", ptrX, ptrY) ||
                 Smg2Ui::isPointingPane(sFileSelectLayout, "MiiButton", ptrX, ptrY)) {
                 sFileFocus = 3;
@@ -415,7 +422,7 @@ void GameScene::update() {
             }
         }
     } else {
-        sMarioActor.update(stickX, stickY, buttons, sStageGravity);
+        sMarioActor.update(stickX, stickY, buttons, sStageGravity, sCameraDirector.getYaw());
         sCameraDirector.update(sMarioActor.getPosition(), sMarioActor.getUpVec(), sMarioActor.getYaw(), buttons, pressed);
         const f32 stickMag = __builtin_sqrtf(stickX * stickX + stickY * stickY);
         Smg23D::setMarioAnim(sMarioActor.getAnimState(), stickMag);

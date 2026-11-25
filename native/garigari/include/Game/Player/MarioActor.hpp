@@ -10,7 +10,7 @@ public:
     MarioActor();
 
     void init(const char* pStageName);
-    void update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManager* pGravityMgr);
+    void update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManager* pGravityMgr, f32 camYaw = 0.0f);
 
     const TVec3f& getPosition() const { return mPos; }
     const TVec3f& getVelocity() const { return mVel; }
