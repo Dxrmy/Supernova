@@ -20,6 +20,8 @@ struct SmokeHost {
     std::string game_id;
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     int stepped = 0;
+    bool test_stage = false;
+    int max_steps = 1;
 };
 
 void svc_log(void*, const char* text) {
@@ -100,8 +102,49 @@ uint64_t svc_clock_ns(void* user) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - h->start).count() + 1);
 }
 
-void svc_frame_wait(void*) {}
+void svc_frame_wait(void* user) {
+    auto* h = static_cast<SmokeHost*>(user);
+    if (h->test_stage) {
+        h->stepped++;
+        if (h->stepped >= h->max_steps) {
+            std::printf("smg2_smoke_test --test-stage completed cleanly (steps=%d)\n", h->stepped);
+            std::exit(0);
+        }
+    }
+}
 void svc_frame_begun(void*, int, uint32_t) {}
+uint32_t svc_input_read(void* user, uint32_t, NebulaInputDevice* dev, NebulaInputSample* out) {
+    if (dev != nullptr) {
+        dev->connected = 1;
+        dev->nunchuk = 1;
+        dev->battery = 4;
+    }
+    if (out == nullptr) return 0u;
+    std::memset(out, 0, sizeof(*out));
+    auto* h = static_cast<SmokeHost*>(user);
+    if (!h->test_stage) return 1u;
+    // LogoScene transitions around frame 120.
+    // Frame 130: Title -> FileSelect (A)
+    // Frame 132: FileSelect -> Icon (UP)
+    // Frame 134: Toggle Icon (A)
+    // Frame 136: Icon -> Slot 1 (DOWN)
+    // Frame 138: Slot 1 -> Confirm (A)
+    // Frame 140: Confirm -> InStage (A)
+    // Frames 142..165: Run & orbit camera & press C reset
+    if (h->stepped == 130 || h->stepped == 134 || h->stepped == 138 || h->stepped == 140) {
+        out->buttons = NEBULA_BUTTON_A;
+    } else if (h->stepped == 132) {
+        out->buttons = NEBULA_BUTTON_UP;
+    } else if (h->stepped == 136) {
+        out->buttons = NEBULA_BUTTON_DOWN;
+    } else if (h->stepped >= 142) {
+        out->stick[0] = 0.8f;
+        out->stick[1] = 0.6f;
+        if (h->stepped == 150) out->buttons = NEBULA_BUTTON_LEFT;
+        if (h->stepped == 155) out->buttons = NEBULA_BUTTON_C;
+    }
+    return 1u;
+}
 void svc_test_frame_step(void* user) {
     static_cast<SmokeHost*>(user)->stepped++;
 }
@@ -123,6 +166,23 @@ int main(int argc, char** argv) {
     }
     host.game_id = std::string(host.store.game_id());
     std::printf("Opened game.pak: game_id=%s\n", host.game_id.c_str());
+
+    if (argc >= 4 && std::string(argv[3]) == "--test-stage") {
+        host.test_stage = true;
+        host.max_steps = 165;
+    }
+    if (argc >= 5 && std::string(argv[3]) == "--list") {
+        NebulaAssetEntry dir{};
+        if (svc_asset_find(&host, argv[4], &dir) == 0) {
+            std::printf("Not found: %s\n", argv[4]);
+            return 1;
+        }
+        NebulaAssetEntry child{};
+        for (uint32_t i = 0; svc_asset_child(&host, dir.index, i, &child) != 0; ++i) {
+            std::printf("[%u] %s (dir=%u, len=%llu)\n", i, child.name, child.folder, static_cast<unsigned long long>(child.length));
+        }
+        return 0;
+    }
 
     HMODULE dll = LoadLibraryA(argv[1]);
     if (dll == nullptr) {
@@ -160,8 +220,9 @@ int main(int argc, char** argv) {
     svc.game_id = svc_game_id;
     svc.frame_wait = svc_frame_wait;
     svc.frame_begun = svc_frame_begun;
+    svc.input_read = svc_input_read;
     svc.clock_ns = svc_clock_ns;
-    svc.test_frame_step = svc_test_frame_step;
+    svc.test_frame_step = host.test_stage ? nullptr : svc_test_frame_step;
 
     const uint32_t ver = attach(&svc);
     std::printf("nebula_game_attach returned version=%u\n", ver);

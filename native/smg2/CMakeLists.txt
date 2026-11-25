@@ -199,6 +199,7 @@ set_target_properties(smg2_petari_ui PROPERTIES
 )
 
 target_compile_options(smg2_petari_ui PRIVATE
+    -gline-tables-only
     -ffp-contract=off
     -fno-strict-aliasing
     -fno-math-errno
@@ -257,6 +258,7 @@ set_target_properties(smg_game PROPERTIES
 )
 
 target_compile_options(smg_game PRIVATE
+    -gline-tables-only
     -ffp-contract=off
     -fno-strict-aliasing
     -fno-math-errno

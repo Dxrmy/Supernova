@@ -29,15 +29,15 @@ Supernova uses a **Hybrid Native-First** approach: reconstructing missing SMG2 s
 
 ### Project Completion Status
 
-**Overall Progress:** `[███████░░░░░░░░░░░░░] 35%`
+**Overall Progress:** `[████████░░░░░░░░░░░░] 42%`
 
 | Subsystem | Progress | Verified Status |
 | --- | --- | --- |
-| **1. Engine Runtime & Host** *(ISO Cooker, DX12 Swapchain, Audio Clock, Save I/O)* | `85%` | `nebula-import` (`SB4E01`), D3D12 `Nebula.exe`, 180 Hz audio clock, `NBSV` v4 save I/O |
-| **2. 2D UI & Fonts** *(NLYT / NLAN Layouts, NFNT / CharWriter Fonts, MSBT Localization)* | `75%` | `TitleLogo`, `PressStart`, `FileSelect` `NLYT`/`NLAN`, `NFNT` fonts, 814 `MSBT` strings, interactive slots/hover/confirm |
-| **3. 3D Renderer & Shaders** *(D3D12 Pipelines, J3D Models, Materials, Skyboxes)* | `45%` | 5,539 `NBPIPEL2` pipelines, `ModelData`/`Model`/`MaterialDraw`, `MilkyWaySky`, `MarioFaceShipPlanet`, `Coin`/`StarPiece` |
-| **4. Physics & Character Control** *(KCL Collision, Spherical Gravity, Skeletal BCK Animations)* | `30%` | `PlanetGravityManager`, `KCollisionServer` sphere/raycast alignment, Gram-Schmidt orientation, `XanimeCore` BCK hooks |
-| **5. Game Content & Scenarios** *(Galaxies, Yoshi, Actors, Bosses, Cutscenes)* | `5%` | 62 scenario archives parsed, `IslandFleetGalaxy` / `MarioFaceShipGalaxy` bring-up; full actors/Yoshi/bosses pending |
+| **1. Engine Runtime & Host** *(ISO Cooker, DX12 Swapchain, Audio Clock, Save I/O)* | `88%` | `nebula-import` (`SB4E01`), D3D12 `Nebula.exe`, 180 Hz audio clock, `NBSV` v4 save I/O |
+| **2. 2D UI & Fonts** *(NLYT / NLAN Layouts, NFNT / CharWriter Fonts, MSBT Localization)* | `82%` | `TitleLogo`, `PressStart`, `FileSelect` (slots, `MiiButton`, `DeleteButton`), in-stage HUD (`HitPointMeter`, `CoinCounter`, `StarCounter`, `StarPieceCounter`), `NFNT`, 814 `MSBT` strings |
+| **3. 3D Renderer & Shaders** *(D3D12 Pipelines, J3D Models, Materials, Skyboxes)* | `52%` | 5,539 `NBPIPEL2` pipelines, `ModelData`/`Model`/`MaterialDraw`, `MilkyWaySky`, `MarioFaceShipPlanet`, `IslandFleetDiscPlanet`, `MarioShadow`, `Coin`/`StarPiece` |
+| **4. Physics & Character Control** *(KCL Collision, Spherical Gravity, Skeletal BCK Animations)* | `42%` | `PlanetGravityManager`, `KCollisionServer` sphere/raycast alignment, Gram-Schmidt orientation, `XanimeCore` (`Wait.bck`/`Run.bck`/`Jump.bck`), smooth `CameraDirector` orbit/reset |
+| **5. Game Content & Scenarios** *(Galaxies, Yoshi, Actors, Bosses, Cutscenes)* | `8%` | 62 scenario archives parsed, `IslandFleetGalaxy` / `MarioFaceShipGalaxy` bring-up with collectible pickups & HUD counters; full actors/Yoshi/bosses pending |
 
 ---
 

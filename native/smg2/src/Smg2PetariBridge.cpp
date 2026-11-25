@@ -598,11 +598,13 @@ namespace Smg23D {
         u32 sStageModelCount = 0;
         Model* sSkyModel = nullptr;
         Model* sMenuShipModel = nullptr;
+        Model* sMarioShadowModel = nullptr;
         Model* sCoinModel = nullptr;
         Model* sStarPieceModel = nullptr;
         struct CollectiblePos {
             f32 x, y, z;
             bool isCoin;
+            bool collected;
         };
         constexpr u32 kMaxCollectibles = 8;
         CollectiblePos sCollectibles[kMaxCollectibles]{};
@@ -727,13 +729,6 @@ namespace Smg23D {
     void mountStageModels(const char* pStageName) {
         mountMenuBackdrop();
         if (sMarioModel == nullptr) {
-            GameAssets::FolderEntry mfe{};
-            for (u32 i = 0; i < 30u && GameAssets::folderEntry("/ObjectData/Mario", i, &mfe); ++i) {
-                nebula_log("[SMG2-3D] /ObjectData/Mario[%u]: %s", i, mfe.mName);
-            }
-            for (u32 i = 0; i < 30u && GameAssets::folderEntry("/ObjectData/MarioAnime", i, &mfe); ++i) {
-                nebula_log("[SMG2-3D] /ObjectData/MarioAnime[%u]: %s", i, mfe.mName);
-            }
             sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bdl", false);
             if (sMarioModel == nullptr) {
                 sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bmd", false);
@@ -750,7 +745,7 @@ namespace Smg23D {
                 sMarioClips[2] = loadClipFromArchive("/ObjectData/Mario", kJumpNames, 4u, pMarioData);
                 if (sMarioClips[2] == nullptr) sMarioClips[2] = loadClipFromArchive("/ObjectData/MarioAnime", kJumpNames, 4u, pMarioData);
                 if (sMarioClips[0] != nullptr) {
-                    sMarioAnimCore = new (Arenas::permanent(), 0) XanimeCore(pMarioData->getJointCount(), 1u, pMarioData->getScaleMode());
+                    sMarioAnimCore = new (Arenas::permanent(), 0) XanimeCore(1u, pMarioData->getJointCount(), pMarioData->getScaleMode());
                     sMarioAnimCore->enableJointTransform(pMarioData);
                     for (u32 j = 0; j < pMarioData->getJointCount(); ++j) {
                         pMarioData->getJointAt(j)->setMtxCalc(sMarioAnimCore);
@@ -811,6 +806,9 @@ namespace Smg23D {
         if (sStarPieceModel == nullptr) {
             sStarPieceModel = loadModelFromArchive("/ObjectData/StarPiece", nullptr, false);
         }
+        if (sMarioShadowModel == nullptr) {
+            sMarioShadowModel = loadModelFromArchive("/ObjectData/MarioShadow", nullptr, false);
+        }
         sCollectibleCount = 0;
         for (u32 c = 0; c < kMaxCollectibles; ++c) {
             const f32 ang = static_cast<f32>(c) * (6.283185f / static_cast<f32>(kMaxCollectibles));
@@ -818,10 +816,10 @@ namespace Smg23D {
             const f32 rz = 350.0f * __builtin_sinf(ang);
             f32 hx = rx, hy = 1050.0f, hz = rz;
             raycastPlanet(rx, 2000.0f, rz, 0.0f, -1.0f, 0.0f, 4000.0f, &hx, &hy, &hz, nullptr, nullptr, nullptr);
-            sCollectibles[sCollectibleCount++] = CollectiblePos{ hx, hy + 60.0f, hz, (c % 2u) == 0u };
+            sCollectibles[sCollectibleCount++] = CollectiblePos{ hx, hy + 60.0f, hz, (c % 2u) == 0u, false };
         }
-        nebula_log("[SMG2-3D] Stage '%s' ready: mario=%p, stageModels=%u, kcl=%u, sky=%p, coin=%p, starPiece=%p",
-                   pStageName != nullptr ? pStageName : "", sMarioModel, sStageModelCount, sKclCount, sSkyModel, sCoinModel, sStarPieceModel);
+        nebula_log("[SMG2-3D] Stage '%s' ready: mario=%p, shadow=%p, stageModels=%u, kcl=%u, sky=%p, coin=%p, starPiece=%p",
+                   pStageName != nullptr ? pStageName : "", sMarioModel, sMarioShadowModel, sStageModelCount, sKclCount, sSkyModel, sCoinModel, sStarPieceModel);
     }
 
     bool resolveSphereCollision(f32* ioX, f32* ioY, f32* ioZ, f32 radius, f32* outNormalX, f32* outNormalY, f32* outNormalZ) {
@@ -997,9 +995,18 @@ namespace Smg23D {
         }
         const f32 spin = static_cast<f32>(step) * 0.05f;
         for (u32 c = 0; c < sCollectibleCount; ++c) {
+            if (sCollectibles[c].collected) continue;
             Model* m = sCollectibles[c].isCoin ? sCoinModel : sStarPieceModel;
             if (m != nullptr && m->getModelData() != nullptr) {
                 drawSingleModel(m, sCollectibles[c].x, sCollectibles[c].y, sCollectibles[c].z, spin + static_cast<f32>(c) * 0.5f);
+            }
+        }
+        if (sMarioShadowModel != nullptr && sMarioShadowModel->getModelData() != nullptr) {
+            f32 sx = marioX, sy = marioY, sz = marioZ;
+            f32 snx = upX, sny = upY, snz = upZ;
+            if (raycastPlanet(marioX + upX * 50.0f, marioY + upY * 50.0f, marioZ + upZ * 50.0f,
+                              -upX, -upY, -upZ, 2000.0f, &sx, &sy, &sz, &snx, &sny, &snz)) {
+                drawSingleModel(sMarioShadowModel, sx + snx * 2.0f, sy + sny * 2.0f, sz + snz * 2.0f, marioYawRad);
             }
         }
         if (sMarioModel == nullptr || sMarioModel->getModelData() == nullptr) {
@@ -1034,6 +1041,28 @@ namespace Smg23D {
         marioMtx[1][0] = ry; marioMtx[1][1] = uy; marioMtx[1][2] = fy; marioMtx[1][3] = marioY;
         marioMtx[2][0] = rz; marioMtx[2][1] = uz; marioMtx[2][2] = fz; marioMtx[2][3] = marioZ;
         drawModelWithMtx(sMarioModel, marioMtx);
+    }
+
+    void checkCollectiblePickups(f32 marioX, f32 marioY, f32 marioZ, s32* outCoins, s32* outStarPieces) {
+        constexpr f32 kPickupRadiusSq = 80.0f * 80.0f;
+        for (u32 c = 0; c < sCollectibleCount; ++c) {
+            if (sCollectibles[c].collected) continue;
+            const f32 dx = sCollectibles[c].x - marioX;
+            const f32 dy = sCollectibles[c].y - marioY;
+            const f32 dz = sCollectibles[c].z - marioZ;
+            if (dx * dx + dy * dy + dz * dz < kPickupRadiusSq) {
+                sCollectibles[c].collected = true;
+                if (sCollectibles[c].isCoin) {
+                    if (outCoins != nullptr) ++(*outCoins);
+                } else {
+                    if (outStarPieces != nullptr) ++(*outStarPieces);
+                }
+                nebula_log("[SMG2-3D] Collected %s (coins=%d, starPieces=%d)",
+                           sCollectibles[c].isCoin ? "Coin" : "StarPiece",
+                           outCoins != nullptr ? *outCoins : 0,
+                           outStarPieces != nullptr ? *outStarPieces : 0);
+            }
+        }
     }
 
     void end3DScene() {
