@@ -48,6 +48,7 @@ namespace {
     uint32_t sRegisteredCount = 0u;
 
     uint32_t sUiPipeline = 0u;
+    uint32_t sFlatPipeline = 0u;
     uint32_t sTexSpace = 0u;
     uint32_t sTexLogo = 0u;
     uint32_t sTexTico = 0u;
@@ -146,11 +147,21 @@ namespace {
         NebulaPipelineDesc desc{};
         desc.vertex = NEBULA_PROGRAM_SITE | (static_cast<uint64_t>(NEBULA_SHADER_J2D_PICTURE) << 1u);
         desc.pixel = NEBULA_PROGRAM_SITE | (static_cast<uint64_t>(NEBULA_SHADER_J2D_PICTURE) << 1u);
-        // Blend alpha (op=1, src=4 SRC_ALPHA, dst=5 INV_SRC_ALPHA), depth test=off, cull=none, color_write
-        desc.state = NEBULA_STATE_BLEND(1u, 4u, 5u) | NEBULA_STATE_CULL(0u) | NEBULA_STATE_COLOR_WRITE;
+        // Blend alpha (op=1, src=4 SRC_ALPHA, dst=5 INV_SRC_ALPHA), depth test=off (COMPARE_ALWAYS), cull=none, color+alpha write
+        desc.state = NEBULA_STATE_BLEND(1u, 4u, 5u) | NEBULA_STATE_DEPTH(0u, NEBULA_COMPARE_ALWAYS, 0u) |
+                     NEBULA_STATE_CULL(NEBULA_CULL_NONE) | NEBULA_STATE_COLOR_WRITE | NEBULA_STATE_ALPHA_WRITE;
         desc.input_count = 2u;
         desc.position_stride = sizeof(RingVertex2D);
         sUiPipeline = host->pipeline_register(host->user, &desc, inputs);
+
+        NebulaPipelineDesc flatDesc{};
+        flatDesc.vertex = NEBULA_PROGRAM_SITE | (static_cast<uint64_t>(NEBULA_SHADER_FLAT_COLOR) << 1u);
+        flatDesc.pixel = NEBULA_PROGRAM_SITE | (static_cast<uint64_t>(NEBULA_SHADER_FLAT_COLOR) << 1u);
+        flatDesc.state = NEBULA_STATE_BLEND(0u, 0u, 0u) | NEBULA_STATE_DEPTH(0u, NEBULA_COMPARE_ALWAYS, 0u) |
+                         NEBULA_STATE_CULL(NEBULA_CULL_NONE) | NEBULA_STATE_COLOR_WRITE | NEBULA_STATE_ALPHA_WRITE;
+        flatDesc.input_count = 0u;
+        flatDesc.position_stride = sizeof(RingVertex2D);
+        sFlatPipeline = host->pipeline_register(host->user, &flatDesc, nullptr);
 
         sTexSpace = loadCookedTextureTable(host, "LayoutData/TitleLogo/timg/MyTitleSpace.tpl");
         sTexLogo = loadCookedTextureTable(host, "LayoutData/TitleLogo/timg/MyTitleLogo.tpl");
@@ -206,8 +217,59 @@ namespace {
         item.constants = q;
         item.textures = texTable;
         item.block = 0u;
-        item.ring_at = q * 4u * sizeof(RingVertex2D);
-        item.ring_count = 4u;
+        item.ring_at = 0u;
+        item.ring_count = 0u;
+        item.first = q * 6u;
+        item.count = 6u;
+        item.slot = 100u + q;
+        item.generation = 1u;
+        item.part = q;
+        item.matrix = 0u;
+        item.view = 0u;
+        item.light_set = NEBULA_NONE32;
+        item.flags = NEBULA_ITEM_RING | NEBULA_ITEM_INDEXED | NEBULA_ITEM_NO_CULL | (NEBULA_CATEGORY_DRAW << NEBULA_ITEM_CATEGORY_SHIFT);
+    }
+
+    void pushSolidQuad(FrameSlot& slot, uint32_t& quadIdx, float x, float y, float w, float h, float r, float g, float b, float a) {
+        if (quadIdx >= kMaxQuads || sFlatPipeline == 0u) {
+            return;
+        }
+        const uint32_t q = quadIdx++;
+        RingVertex2D* v = &slot.vertices[q * 4u];
+        v[0] = {x, y, 0.0f, 0xFFFFFFFFu, 0.0f, 0.0f};
+        v[1] = {x + w, y, 0.0f, 0xFFFFFFFFu, 1.0f, 0.0f};
+        v[2] = {x + w, y + h, 0.0f, 0xFFFFFFFFu, 1.0f, 1.0f};
+        v[3] = {x, y + h, 0.0f, 0xFFFFFFFFu, 0.0f, 1.0f};
+
+        uint32_t* idx = &slot.indices[q * 6u];
+        const uint32_t base = q * 4u;
+        idx[0] = base + 0u;
+        idx[1] = base + 1u;
+        idx[2] = base + 2u;
+        idx[3] = base + 0u;
+        idx[4] = base + 2u;
+        idx[5] = base + 3u;
+
+        std::memset(slot.constRows[q], 0, sizeof(slot.constRows[q]));
+        slot.constRows[q][0][0] = r;
+        slot.constRows[q][0][1] = g;
+        slot.constRows[q][0][2] = b;
+        slot.constRows[q][0][3] = a;
+
+        slot.constants[q].slot = NEBULA_NONE32;
+        slot.constants[q].vertex_rows = 1u;
+        slot.constants[q].pixel_rows = 0u;
+        slot.constants[q].rows = slot.constRows[q];
+
+        NebulaFrameItem& item = slot.items[q];
+        std::memset(&item, 0, sizeof(item));
+        item.mesh = sizeof(RingVertex2D);
+        item.pipeline = sFlatPipeline;
+        item.constants = q;
+        item.textures = 0u;
+        item.block = 0u;
+        item.ring_at = 0u;
+        item.ring_count = 0u;
         item.first = q * 6u;
         item.count = 6u;
         item.slot = 100u + q;
@@ -386,18 +448,25 @@ void submitFrame(uint32_t frame) {
         pushQuad(slot, quadCount, px, py, 64.0f, 64.0f, sTexTico, 1.0f);
     }
 
-    const uint32_t clearRgba = (sScreenState == 3) ? NEBULA_RGBA(18, 42, 86, 255) : NEBULA_RGBA(8, 10, 26, 255);
+    // Fallback diagnostic bright yellow solid quad in center of screen
+    pushSolidQuad(slot, quadCount, 270.0f, 390.0f, 100.0f, 24.0f, 1.0f, 0.9f, 0.1f, 1.0f);
 
-    slot.passes[0].kind = NEBULA_PASS_SCENE_BEGIN;
-    slot.passes[0].scene_camera = 0u;
-    slot.passes[0].scene_view = 0u;
+    for (uint32_t q = 0u; q < quadCount; ++q) {
+        slot.items[q].ring_count = quadCount * 4u;
+    }
 
-    slot.passes[1].kind = NEBULA_PASS_DRAW;
-    slot.passes[1].layer = NEBULA_LAYER_SCENE;
-    slot.passes[1].phase = 0xFFu;
-    slot.passes[1].clear_channels = 1u | 4u;
-    slot.passes[1].load = 1u;
-    slot.passes[1].clear_rgba = clearRgba;
+    // Cornflower Blue (r=0.2, g=0.4, b=0.8, a=1.0) swapchain sanity clear
+    const uint32_t clearRgba = NEBULA_RGBA(51, 102, 204, 255);
+
+    slot.passes[0].kind = NEBULA_PASS_CLEAR;
+    slot.passes[0].layer = NEBULA_LAYER_SCENE;
+    slot.passes[0].phase = 0xFFu;
+    slot.passes[0].clear_channels = 1u | 2u | 4u;
+    slot.passes[0].clear_rgba = clearRgba;
+    slot.passes[0].scene_camera = NEBULA_NONE32;
+    slot.passes[0].scene_view = NEBULA_NONE32;
+
+    slot.passes[1].kind = NEBULA_PASS_SCENE_BEGIN;
     slot.passes[1].scene_camera = 0u;
     slot.passes[1].scene_view = 0u;
 
