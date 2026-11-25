@@ -14,11 +14,13 @@ public:
 
     const TVec3f& getPosition() const { return mPos; }
     const TVec3f& getTarget() const { return mTarget; }
+    const TVec3f& getUp() const { return mUp; }
     f32 getYaw() const { return mYaw; }
 
 private:
     TVec3f mPos;
     TVec3f mTarget;
+    TVec3f mUp;
     f32 mYaw;
     f32 mTargetYaw;
     f32 mDistance;

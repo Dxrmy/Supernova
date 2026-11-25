@@ -564,8 +564,34 @@ namespace Smg2Ui {
     }
     void setPaneVisible(LayoutManager* pMgr, const char* pPaneName, bool visible) {
         if (pMgr == nullptr) return;
-        if (Ui::Pane* pPane = pMgr->getPane(pPaneName)) {
+        if (Ui::Pane* pPane = (pPaneName != nullptr ? pMgr->getPane(pPaneName) : (pMgr->mLayout != nullptr ? pMgr->mLayout->mpRootPane : nullptr))) {
             pPane->SetVisible(visible);
+        }
+    }
+    void setPanePos(LayoutManager* pMgr, const char* pPaneName, f32 x, f32 y) {
+        if (pMgr == nullptr) return;
+        if (Ui::Pane* pPane = (pPaneName != nullptr ? pMgr->getPane(pPaneName) : (pMgr->mLayout != nullptr ? pMgr->mLayout->mpRootPane : nullptr))) {
+            pPane->mTranslate.x = x;
+            pPane->mTranslate.y = y;
+        }
+    }
+    void setPaneScale(LayoutManager* pMgr, const char* pPaneName, f32 sx, f32 sy) {
+        if (pMgr == nullptr) return;
+        if (Ui::Pane* pPane = (pPaneName != nullptr ? pMgr->getPane(pPaneName) : (pMgr->mLayout != nullptr ? pMgr->mLayout->mpRootPane : nullptr))) {
+            pPane->mScale.x = sx;
+            pPane->mScale.y = sy;
+        }
+    }
+    void setPaneAnimFrameAndStop(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, f32 frame, u32 layer) {
+        if (pMgr == nullptr || pPaneName == nullptr || pAnimName == nullptr) return;
+        if (pMgr->getAnimTransform(pAnimName) == nullptr) return;
+        LayoutPaneCtrl* pCtrl = pMgr->createAndAddPaneCtrl(pPaneName, layer + 1u);
+        if (pCtrl != nullptr) {
+            pCtrl->start(pAnimName, layer);
+            if (FrameCtrl* pFc = pCtrl->getFrameCtrl(layer)) {
+                pFc->setFrame(frame);
+                pFc->setRate(0.0f);
+            }
         }
     }
     void startPaneAnim(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, u32 layer) {
@@ -612,6 +638,7 @@ namespace Smg23D {
         KCollisionServer* sKclServers[kMaxStageModels]{};
         u32 sKclCount = 0;
         f32 sCamPosX = 0.0f, sCamPosY = 0.0f, sCamPosZ = 0.0f;
+        f32 sCamUpX = 0.0f, sCamUpY = 1.0f, sCamUpZ = 0.0f;
         bool sStageModelsMounted = false;
         bool sMenuBackdropMounted = false;
 
@@ -699,7 +726,7 @@ namespace Smg23D {
     }  // namespace
 
     bool raycastPlanet(f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz, f32 maxDist,
-                       f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz);
+                       f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz, bool topSurfaceOnly = false);
 
     void mountMenuBackdrop() {
         if (sMenuBackdropMounted) return;
@@ -822,7 +849,7 @@ namespace Smg23D {
                    pStageName != nullptr ? pStageName : "", sMarioModel, sMarioShadowModel, sStageModelCount, sKclCount, sSkyModel, sCoinModel, sStarPieceModel);
     }
 
-    bool resolveSphereCollision(f32* ioX, f32* ioY, f32* ioZ, f32 radius, f32* outNormalX, f32* outNormalY, f32* outNormalZ) {
+    bool resolveSphereCollision(f32* ioX, f32* ioY, f32* ioZ, f32 radius, f32* outNormalX, f32* outNormalY, f32* outNormalZ, bool topSurfaceOnly = false) {
         if (sKclCount == 0u || ioX == nullptr || ioY == nullptr || ioZ == nullptr) return false;
         bool hitAny = false;
         f32 bestNx = 0.0f, bestNy = 1.0f, bestNz = 0.0f;
@@ -844,7 +871,7 @@ namespace Smg23D {
                 const f32 pen = radius - dists[h];
                 if (pen > 0.0f) {
                     const Vec3f* n = srv->getFaceNormal(prisms[h]);
-                    if (n != nullptr) {
+                    if (n != nullptr && (!topSurfaceOnly || n->y > 0.2f)) {
                         center.x += n->x * pen;
                         center.y += n->y * pen;
                         center.z += n->z * pen;
@@ -868,7 +895,7 @@ namespace Smg23D {
     }
 
     bool raycastPlanet(f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz, f32 maxDist,
-                       f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz) {
+                       f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz, bool topSurfaceOnly) {
         if (sKclCount == 0u) return false;
         const Vec3f origin(x, y, z);
         const Vec3f dir(dx * maxDist, dy * maxDist, dz * maxDist);
@@ -890,9 +917,11 @@ namespace Smg23D {
                     if (prisms[i] == nullptr) continue;
                     const s32 triIdx = srv->toIndex(prisms[i]);
                     if (triIdx < 0 || triIdx >= srv->getTriangleNum()) continue;
+                    const Vec3f* n = srv->getFaceNormal(prisms[i]);
+                    if (topSurfaceOnly && (n == nullptr || n->y <= 0.2f)) continue;
                     if (dists[i] >= 0.0f && dists[i] < bestT) {
                         bestT = dists[i];
-                        if (const Vec3f* n = srv->getFaceNormal(prisms[i])) {
+                        if (n != nullptr) {
                             bestN = *n;
                         }
                         found = true;
@@ -923,12 +952,18 @@ namespace Smg23D {
         }
     }
 
+    void setCameraUp(f32 ux, f32 uy, f32 uz) {
+        sCamUpX = ux;
+        sCamUpY = uy;
+        sCamUpZ = uz;
+    }
+
     void begin3DScene(f32 camX, f32 camY, f32 camZ, f32 targetX, f32 targetY, f32 targetZ, f32 fovY, f32 nearZ, f32 farZ) {
         sCamPosX = camX;
         sCamPosY = camY;
         sCamPosZ = camZ;
         Point3d camPos = { camX, camY, camZ };
-        Vec upVec = { 0.0f, 1.0f, 0.0f };
+        Vec upVec = { sCamUpX, sCamUpY, sCamUpZ };
         Point3d targetPos = { targetX, targetY, targetZ };
         Mtx viewMtx;
         NebulaMtxLookAt(viewMtx, &camPos, &upVec, &targetPos);

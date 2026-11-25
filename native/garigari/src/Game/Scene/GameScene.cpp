@@ -31,6 +31,9 @@ namespace Smg2Ui {
     void setTextBoxMessage(LayoutManager* pMgr, const char* pPaneName, const char16_t* pMsg);
     void setTextBoxNumber(LayoutManager* pMgr, const char* pPaneName, s32 number);
     void setPaneVisible(LayoutManager* pMgr, const char* pPaneName, bool visible);
+    void setPanePos(LayoutManager* pMgr, const char* pPaneName, f32 x, f32 y);
+    void setPaneScale(LayoutManager* pMgr, const char* pPaneName, f32 sx, f32 sy);
+    void setPaneAnimFrameAndStop(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, f32 frame, u32 layer);
     void startPaneAnim(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, u32 layer);
     bool isPointingPane(const LayoutManager* pMgr, const char* pPaneName, f32 screenX, f32 screenY);
 }  // namespace Smg2Ui
@@ -39,6 +42,7 @@ namespace Smg23D {
     void mountMenuBackdrop();
     void mountStageModels(const char* pStageName);
     void setMarioAnim(int animState, f32 speedScale);
+    void setCameraUp(f32 ux, f32 uy, f32 uz);
     void begin3DScene(f32 camX, f32 camY, f32 camZ, f32 targetX, f32 targetY, f32 targetZ, f32 fovY, f32 nearZ, f32 farZ);
     void drawMenuBackdrop(u32 step);
     void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 upX, f32 upY, f32 upZ, f32 marioYawRad, u32 step);
@@ -56,10 +60,14 @@ namespace {
     LayoutManager* sTitleLogoLayout = nullptr;
     LayoutManager* sPressStartLayout = nullptr;
     LayoutManager* sFileSelectLayout = nullptr;
+    LayoutManager* sFileInfoLayout = nullptr;
+    LayoutManager* sFileNumberLayouts[3]{};
+    LayoutManager* sPointerLayout = nullptr;
     LayoutManager* sHitPointMeterLayout = nullptr;
     LayoutManager* sCoinCounterLayout = nullptr;
     LayoutManager* sStarCounterLayout = nullptr;
     LayoutManager* sStarPieceCounterLayout = nullptr;
+    bool sHasPointer = false;
     bool sTitleWaitStarted = false;
     bool sPressStartWaitStarted = false;
     bool sFileSelectWaitStarted = false;
@@ -80,17 +88,27 @@ namespace {
         }
     }
 
-    void updateFileFocusAnims(LayoutManager* pLayout, int newFocus) {
-        if (pLayout == nullptr || newFocus == sPrevFileFocus) return;
-        if (sPrevFileFocus >= 0) {
-            Smg2Ui::startPaneAnim(pLayout, focusPaneName(sPrevFileFocus), "ButtonSelectOut", 0u);
+    void updateFileFocusAnims(LayoutManager* pLayout, int newFocus, int activeSlot) {
+        if (pLayout != nullptr && newFocus != sPrevFileFocus) {
+            if (sPrevFileFocus >= 0) {
+                const char* prevName = focusPaneName(sPrevFileFocus);
+                Smg2Ui::startPaneAnim(pLayout, prevName, "ButtonSelectOut", 0u);
+                Smg2Ui::setPaneScale(pLayout, prevName, 1.0f, 1.0f);
+            }
+            const char* curName = focusPaneName(newFocus);
+            Smg2Ui::startPaneAnim(pLayout, curName, "ButtonSelectIn", 0u);
+            Smg2Ui::setPaneScale(pLayout, curName, 1.12f, 1.12f);
+            sPrevFileFocus = newFocus;
         }
-        Smg2Ui::startPaneAnim(pLayout, focusPaneName(newFocus), "ButtonSelectIn", 0u);
-        sPrevFileFocus = newFocus;
+        for (int i = 0; i < 3; ++i) {
+            if (sFileNumberLayouts[i] == nullptr) continue;
+            const bool selected = (i == activeSlot - 1);
+            Smg2Ui::setPaneScale(sFileNumberLayouts[i], nullptr, selected ? 1.15f : 1.0f, selected ? 1.15f : 1.0f);
+            Smg2Ui::startRootAnim(sFileNumberLayouts[i], selected ? "SelectIn" : "SelectOut", 1u);
+        }
     }
 
     void populateFileSelectPanes(LayoutManager* pLayout, s32 slot) {
-        if (pLayout == nullptr) return;
         const char* userName = GameDataFunction::getUserName();
         char16_t userW[32]{};
         if (userName != nullptr) {
@@ -100,13 +118,20 @@ namespace {
         }
         const s32 stars = GameDataFunction::calcCurrentPowerStarNum();
         const s32 misses = GameDataFunction::getPlayerGameOverNum();
-        Smg2Ui::setTextBoxNumber(pLayout, "FileNumber", slot);
-        Smg2Ui::setTextBoxMessage(pLayout, "FileName", userW);
-        Smg2Ui::setTextBoxNumber(pLayout, "Star", stars);
-        Smg2Ui::setTextBoxNumber(pLayout, "StarPiece", 0);
-        Smg2Ui::setTextBoxNumber(pLayout, "MissCounter", misses);
-        Smg2Ui::setPaneVisible(pLayout, "TxtMario", !sUseLuigiIcon);
-        Smg2Ui::setPaneVisible(pLayout, "TxtLuigi", sUseLuigiIcon);
+        LayoutManager* targets[2] = { pLayout, sFileInfoLayout };
+        for (LayoutManager* tgt : targets) {
+            if (tgt == nullptr) continue;
+            Smg2Ui::setTextBoxNumber(tgt, "FileNumber", slot);
+            Smg2Ui::setTextBoxMessage(tgt, "FileName", userW);
+            Smg2Ui::setTextBoxNumber(tgt, "Star", stars);
+            Smg2Ui::setTextBoxNumber(tgt, "StarPiece", 0);
+            Smg2Ui::setTextBoxNumber(tgt, "MissCounter", misses);
+            Smg2Ui::setPaneVisible(tgt, "BrosIcon", true);
+            Smg2Ui::setPaneVisible(tgt, "TxtMario", !sUseLuigiIcon);
+            Smg2Ui::setPaneVisible(tgt, "TxtLuigi", sUseLuigiIcon);
+            Smg2Ui::setPaneVisible(tgt, "Complete1", false);
+            Smg2Ui::setPaneVisible(tgt, "Complete2", false);
+        }
     }
 
     void updateStageHudCounters() {
@@ -173,14 +198,34 @@ void GameScene::enterFileSelect() {
     if (sFileSelectLayout == nullptr) {
         sFileSelectLayout = Smg2Ui::createLayout("FileSelect", true, 2u, 0u, true);
     }
+    if (sFileInfoLayout == nullptr) {
+        sFileInfoLayout = Smg2Ui::createLayout("FileInfo", true, 3u, 0u, true);
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (sFileNumberLayouts[i] == nullptr) {
+            sFileNumberLayouts[i] = Smg2Ui::createLayout("FileNumber", true, 2u, 0u, true);
+        }
+        Smg2Ui::setTextBoxNumber(sFileNumberLayouts[i], "FileNumber", i + 1);
+        Smg2Ui::setPanePos(sFileNumberLayouts[i], nullptr, static_cast<f32>((i - 1) * 180), 40.0f);
+        Smg2Ui::startRootAnimFallback(sFileNumberLayouts[i], "Appear", "Wait", 0u);
+    }
+    if (sPointerLayout == nullptr) {
+        sPointerLayout = Smg2Ui::createLayout("DPDPointer", true, 1u, 0u, true);
+        Smg2Ui::setPaneVisible(sPointerLayout, "HandPointer", false);
+        Smg2Ui::setPaneVisible(sPointerLayout, "HandArrow", false);
+        Smg2Ui::setPaneVisible(sPointerLayout, "PicNozzle", false);
+        Smg2Ui::setPaneVisible(sPointerLayout, "StarPointer", true);
+    }
+    Smg2Ui::setPaneVisible(sFileSelectLayout, "P2ManualButton", false);
     sFileSelectWaitStarted = false;
     sFileFocus = (mSelectedFileSlot >= 1 && mSelectedFileSlot <= 3) ? (mSelectedFileSlot - 1) : 0;
     sPrevFileFocus = -1;
     sConfirmOpen = false;
     sEraseConfirm = false;
     Smg2Ui::startRootAnimFallback(sFileSelectLayout, "Appear", "Wait", 0u);
+    Smg2Ui::startRootAnimFallback(sFileInfoLayout, "Appear", "Wait", 0u);
     populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
-    updateFileFocusAnims(sFileSelectLayout, sFileFocus);
+    updateFileFocusAnims(sFileSelectLayout, sFileFocus, mSelectedFileSlot);
     nebula_log("[SMG2-SCENE] GameScene -> File Select (slot=%d, user='%s', stars=%d)",
                mSelectedFileSlot, GameDataFunction::getUserName(), GameDataFunction::calcCurrentPowerStarNum());
 }
@@ -211,9 +256,12 @@ void GameScene::enterStage(const char* pStageName) {
     if (sStarCounterLayout == nullptr) sStarCounterLayout = Smg2Ui::createLayout("StarCounter", true, 1u, 0u, true);
     if (sStarPieceCounterLayout == nullptr) sStarPieceCounterLayout = Smg2Ui::createLayout("StarPieceCounter", true, 1u, 0u, true);
     Smg2Ui::startRootAnimFallback(sHitPointMeterLayout, "Appear", "Wait", 0u);
+    Smg2Ui::setPaneAnimFrameAndStop(sHitPointMeterLayout, "HitPointMeter", "Count", static_cast<f32>(sStageLife), 0u);
     Smg2Ui::startRootAnimFallback(sCoinCounterLayout, "Appear", "Wait", 0u);
     Smg2Ui::startRootAnimFallback(sStarCounterLayout, "Appear", "Wait", 0u);
     Smg2Ui::startRootAnimFallback(sStarPieceCounterLayout, "Appear", "Wait", 0u);
+    Smg2Ui::setPaneVisible(sStarPieceCounterLayout, "TSPieceCounter", false);
+    Smg2Ui::setPaneVisible(sStarPieceCounterLayout, "StarPieceCounter", true);
     updateStageHudCounters();
     if (GameSystemObjHolder* holder = MR::getGameSystemObjHolder(); holder != nullptr && holder->mAudioSystem != nullptr) {
         holder->mAudioSystem->startStageBgm(mActiveStage);
@@ -241,6 +289,14 @@ void GameScene::update() {
             ptrX = sample.pointer[0] * 416.0f;
             ptrY = sample.pointer[1] * 228.0f;
             hasPtr = true;
+        }
+    }
+    sHasPointer = hasPtr;
+    if (sPointerLayout != nullptr) {
+        Smg2Ui::setPaneVisible(sPointerLayout, "StarPointer", hasPtr);
+        if (hasPtr) {
+            Smg2Ui::setPanePos(sPointerLayout, nullptr, ptrX, ptrY);
+            Smg2Ui::movementLayout(sPointerLayout);
         }
     }
     const uint32_t pressed = buttons & ~sPrevButtons;
@@ -294,9 +350,13 @@ void GameScene::update() {
                 mSelectedFileSlot = sFileFocus + 1;
                 populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
             }
-            updateFileFocusAnims(sFileSelectLayout, sFileFocus);
+            updateFileFocusAnims(sFileSelectLayout, sFileFocus, mSelectedFileSlot);
         }
         Smg2Ui::movementLayout(sFileSelectLayout);
+        Smg2Ui::movementLayout(sFileInfoLayout);
+        for (int i = 0; i < 3; ++i) {
+            Smg2Ui::movementLayout(sFileNumberLayouts[i]);
+        }
         if ((pressed & (NEBULA_BUTTON_A | NEBULA_BUTTON_PLUS)) != 0u) {
             Smg2Ui::startPaneAnim(sFileSelectLayout, focusPaneName(sFileFocus), "ButtonReaction", 0u);
             if (!sConfirmOpen && !sEraseConfirm && sFileFocus <= 2) {
@@ -367,17 +427,25 @@ void GameScene::calcAnim() {
         Smg2Ui::calcAnimLayout(sPressStartLayout);
     } else if (mPhase == Phase_FileSelect) {
         Smg2Ui::calcAnimLayout(sFileSelectLayout);
+        Smg2Ui::calcAnimLayout(sFileInfoLayout);
+        for (int i = 0; i < 3; ++i) {
+            Smg2Ui::calcAnimLayout(sFileNumberLayouts[i]);
+        }
     } else {
         Smg2Ui::calcAnimLayout(sHitPointMeterLayout);
         Smg2Ui::calcAnimLayout(sCoinCounterLayout);
         Smg2Ui::calcAnimLayout(sStarCounterLayout);
         Smg2Ui::calcAnimLayout(sStarPieceCounterLayout);
     }
+    if (sHasPointer) {
+        Smg2Ui::calcAnimLayout(sPointerLayout);
+    }
 }
 
 void GameScene::draw() const {
     if (mPhase == Phase_Title) {
         const f32 ang = static_cast<f32>(mPhaseSteps) * 0.003f;
+        Smg23D::setCameraUp(0.0f, 1.0f, 0.0f);
         Smg23D::begin3DScene(9500.0f * __builtin_sinf(ang), 1200.0f, 9500.0f * __builtin_cosf(ang), 0.0f, -500.0f, 0.0f, 55.0f, 10.0f, 100000.0f);
         Smg23D::drawMenuBackdrop(static_cast<u32>(mPhaseSteps));
         Smg23D::end3DScene();
@@ -385,15 +453,22 @@ void GameScene::draw() const {
         Smg2Ui::drawLayout(sPressStartLayout);
     } else if (mPhase == Phase_FileSelect) {
         const f32 ang = static_cast<f32>(mPhaseSteps) * 0.003f;
+        Smg23D::setCameraUp(0.0f, 1.0f, 0.0f);
         Smg23D::begin3DScene(9500.0f * __builtin_sinf(ang), 1200.0f, 9500.0f * __builtin_cosf(ang), 0.0f, -500.0f, 0.0f, 55.0f, 10.0f, 100000.0f);
         Smg23D::drawMenuBackdrop(static_cast<u32>(mPhaseSteps));
         Smg23D::end3DScene();
+        Smg2Ui::drawLayout(sFileInfoLayout);
+        for (int i = 0; i < 3; ++i) {
+            Smg2Ui::drawLayout(sFileNumberLayouts[i]);
+        }
         Smg2Ui::drawLayout(sFileSelectLayout);
     } else {
         const TVec3f& pos = sMarioActor.getPosition();
         const TVec3f& up = sMarioActor.getUpVec();
         const TVec3f& camPos = sCameraDirector.getPosition();
         const TVec3f& camTgt = sCameraDirector.getTarget();
+        const TVec3f& camUp = sCameraDirector.getUp();
+        Smg23D::setCameraUp(camUp.x, camUp.y, camUp.z);
         Smg23D::begin3DScene(camPos.x, camPos.y, camPos.z, camTgt.x, camTgt.y, camTgt.z, 60.0f, 10.0f, 100000.0f);
         Smg23D::drawStageAndMario(pos.x, pos.y, pos.z, up.x, up.y, up.z, sMarioActor.getYaw(), static_cast<u32>(mPhaseSteps));
         Smg23D::end3DScene();
@@ -401,5 +476,8 @@ void GameScene::draw() const {
         Smg2Ui::drawLayout(sCoinCounterLayout);
         Smg2Ui::drawLayout(sStarCounterLayout);
         Smg2Ui::drawLayout(sStarPieceCounterLayout);
+    }
+    if (sHasPointer) {
+        Smg2Ui::drawLayout(sPointerLayout);
     }
 }

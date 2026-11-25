@@ -28,4 +28,5 @@ private:
     f32 mYaw;
     int mAnimState;
     bool mGrounded;
+    bool mUsePlanarGravity;
 };

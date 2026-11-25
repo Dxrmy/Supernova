@@ -6,9 +6,9 @@
 #include <nebula_module.h>
 
 namespace Smg23D {
-    bool resolveSphereCollision(f32* ioX, f32* ioY, f32* ioZ, f32 radius, f32* outNormalX, f32* outNormalY, f32* outNormalZ);
+    bool resolveSphereCollision(f32* ioX, f32* ioY, f32* ioZ, f32 radius, f32* outNormalX, f32* outNormalY, f32* outNormalZ, bool topSurfaceOnly = false);
     bool raycastPlanet(f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz, f32 maxDist,
-                       f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz);
+                       f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz, bool topSurfaceOnly = false);
 }  // namespace Smg23D
 
 namespace {
@@ -26,38 +26,47 @@ namespace {
 }  // namespace
 
 MarioActor::MarioActor()
-    : mPos(0.0f, 1200.0f, 0.0f),
+    : mPos(0.0f, 1600.0f, 0.0f),
       mVel(0.0f, 0.0f, 0.0f),
       mGravity(0.0f, -1.0f, 0.0f),
       mUp(0.0f, 1.0f, 0.0f),
       mYaw(0.0f),
       mAnimState(0),
-      mGrounded(false) {
+      mGrounded(false),
+      mUsePlanarGravity(true) {
 }
 
 void MarioActor::init(const char* pStageName) {
-    mPos.set(0.0f, 1200.0f, 0.0f);
+    mPos.set(0.0f, 1600.0f, 0.0f);
     mVel.set(0.0f, 0.0f, 0.0f);
     mGravity.set(0.0f, -1.0f, 0.0f);
     mUp.set(0.0f, 1.0f, 0.0f);
     mYaw = 0.0f;
     mAnimState = 0;
     mGrounded = false;
+    mUsePlanarGravity = true;
+    if (pStageName != nullptr && std::strstr(pStageName, "Disc") == nullptr &&
+        std::strstr(pStageName, "IslandFleet") == nullptr &&
+        std::strstr(pStageName, "MarioFaceShip") == nullptr) {
+        mUsePlanarGravity = false;
+    }
 
-    // Snap initial spawn onto KCL planet surface if available
+    // Snap initial spawn onto top deck KCL surface (normal.y > 0.2f when planar/disc)
     f32 hx = 0.0f, hy = 0.0f, hz = 0.0f, nx = 0.0f, ny = 1.0f, nz = 0.0f;
-    if (Smg23D::raycastPlanet(mPos.x, mPos.y + 500.0f, mPos.z, 0.0f, -1.0f, 0.0f, 4000.0f,
-                              &hx, &hy, &hz, &nx, &ny, &nz)) {
+    if (Smg23D::raycastPlanet(mPos.x, mPos.y + 400.0f, mPos.z, 0.0f, -1.0f, 0.0f, 4000.0f,
+                              &hx, &hy, &hz, &nx, &ny, &nz, mUsePlanarGravity)) {
         mPos.set(hx, hy, hz);
         mUp.set(nx, ny, nz);
         mGrounded = true;
     }
-    nebula_log("[SMG2-PLAYER] MarioActor::init(stage='%s') spawn=(%.1f, %.1f, %.1f) grounded=%d",
-               pStageName != nullptr ? pStageName : "", mPos.x, mPos.y, mPos.z, mGrounded ? 1 : 0);
+    nebula_log("[SMG2-PLAYER] MarioActor::init(stage='%s', planar=%d) spawn=(%.1f, %.1f, %.1f) grounded=%d",
+               pStageName != nullptr ? pStageName : "", mUsePlanarGravity ? 1 : 0, mPos.x, mPos.y, mPos.z, mGrounded ? 1 : 0);
 }
 
 void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManager* pGravityMgr) {
-    if (pGravityMgr != nullptr) {
+    if (mUsePlanarGravity) {
+        mGravity.set(0.0f, -1.0f, 0.0f);
+    } else if (pGravityMgr != nullptr) {
         GravityInfo info{};
         TVec3f grav(0.0f, -1.0f, 0.0f);
         if (pGravityMgr->calcTotalGravityVector(&grav, &info, mPos, GRAVITY_TYPE_NORMAL, 0, nullptr)) {
@@ -131,7 +140,7 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
     f32 cy = mPos.y + mUp.y * 45.0f;
     f32 cz = mPos.z + mUp.z * 45.0f;
     f32 nx = 0.0f, ny = 1.0f, nz = 0.0f;
-    if (Smg23D::resolveSphereCollision(&cx, &cy, &cz, 45.0f, &nx, &ny, &nz)) {
+    if (Smg23D::resolveSphereCollision(&cx, &cy, &cz, 45.0f, &nx, &ny, &nz, mUsePlanarGravity)) {
         mPos.set(cx - nx * 45.0f, cy - ny * 45.0f, cz - nz * 45.0f);
         mUp.set(nx, ny, nz);
         const f32 vn = mVel.x * nx + mVel.y * ny + mVel.z * nz;
@@ -145,7 +154,7 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
         // Check short downward ray for gentle curved slopes
         f32 hx = 0.0f, hy = 0.0f, hz = 0.0f;
         if (mGrounded && Smg23D::raycastPlanet(mPos.x + mUp.x * 40.0f, mPos.y + mUp.y * 40.0f, mPos.z + mUp.z * 40.0f,
-                                               -mUp.x, -mUp.y, -mUp.z, 90.0f, &hx, &hy, &hz, &nx, &ny, &nz)) {
+                                               -mUp.x, -mUp.y, -mUp.z, 90.0f, &hx, &hy, &hz, &nx, &ny, &nz, mUsePlanarGravity)) {
             mPos.set(hx, hy, hz);
             mUp.set(nx, ny, nz);
             const f32 vn = mVel.x * nx + mVel.y * ny + mVel.z * nz;
