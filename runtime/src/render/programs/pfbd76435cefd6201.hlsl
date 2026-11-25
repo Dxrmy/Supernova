@@ -1,0 +1,45 @@
+#include "program.hlsli"
+cbuffer MaterialPixel : register(b2) {
+    float4 m[5];
+};
+#define NEBULA_MOTION_CURRENT_INDEX 2
+#define NEBULA_MOTION_PREVIOUS_INDEX 3
+struct Varyings {
+    float4 pos : SV_Position;
+    PER_SAMPLE float2 uv0 : TEXCOORD0;
+    PER_SAMPLE float3 uv1 : TEXCOORD1;
+    VARYINGS_MOTION
+};
+NativeOut program_ps(Varyings i) {
+    float4 prev = float4(1.0, 1.0, 1.0, 1.0);
+    float4 r0 = m[0];
+    float4 r1 = m[1];
+    float4 r2 = m[2];
+    {
+        const float4 t = TEX(0).Sample(SAMP(0), i.uv0).rgba;
+        const float3 k = m[3].rgb;
+        const float3 rc = saturate((float3(0.0, 0.0, 0.0) + lerp(k.rgb, r0.rgb, t.rgb)));
+        const float ra = saturate((r0.a + lerp(t.a, 0.0, 0.0)) * 4.0);
+        r2.rgb = rc;
+        prev.a = ra;
+        NATIVE_STAGE(0, float4(rc, ra))
+    }
+    {
+        const float4 t = TEX(1).Sample(SAMP(1), (i.uv1.z != 0.0 ? i.uv1.xy / i.uv1.z : i.uv1.xy)).rgba;
+        const float3 k = m[4].rgb;
+        const float3 rc = saturate((float3(0.0, 0.0, 0.0) + lerp(k.rgb, r1.rgb, t.rgb)));
+        const float ra = (0.0 + lerp(prev.a, 0.0, 0.0));
+        prev.rgb = rc;
+        prev.a = ra;
+        NATIVE_STAGE(1, float4(rc, ra))
+    }
+    {
+        const float3 rc = (float3(0.0, 0.0, 0.0) + lerp(prev.rgb, r2.rgb, prev.aaa));
+        const float ra = (0.0 + lerp(low8(r2.a), 0.0, 0.0));
+        prev.rgb = rc;
+        prev.a = ra;
+        NATIVE_STAGE(2, float4(rc, ra))
+    }
+    prev = low8(float4(prev.rgb, prev.a));
+    PROGRAM_RETURN(saturate(prev));
+}

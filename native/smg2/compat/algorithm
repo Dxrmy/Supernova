@@ -1,0 +1,15 @@
+#pragma once
+
+#include_next <algorithm>
+#include <functional>
+
+namespace std {
+template <class R, class T>
+inline auto mem_func(R (T::*pm)()) {
+    return std::mem_fn(pm);
+}
+template <class R, class T>
+inline auto mem_func(R (T::*pm)() const) {
+    return std::mem_fn(pm);
+}
+}  // namespace std
