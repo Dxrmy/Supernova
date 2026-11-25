@@ -36,14 +36,14 @@ python -X utf8 tests\smg2_e2e\run_e2e.py --tier 1 --feature 5 --test T1-F05
 
 Optional path & timeout overrides:
 - `--timeout <seconds>` (default `30`)
-- `--artifacts-root <path>` (default `C:\Users\kmric\projects\nebula`)
-- `--garigari-dir <path>` (default `C:\Users\kmric\projects\garigari-fork`)
-- `--upstream-garigari <path>` (default `C:\Users\kmric\projects\Garigari`)
-- `--iso <path>` (default `D:\Roms\Super Mario Galaxy 2 (USA) (En,Fr,Es).iso`)
+- `--artifacts-root <path>` (default repo root `.`)
+- `--garigari-dir <path>` (default `native\garigari`)
+- `--upstream-garigari <path>` (optional path to upstream `Garigari` repo for clean-tree check)
+- `--iso <path>` (optional path to a legal `SB4E01` `.iso` / `.wbfs` disc image)
 
 ## Isolation & Repository Rules
 
-1. **Read-Only Trees:** Tests must NEVER modify `Garigari`, `garigari-fork`, `nebula/native/`, `nebula/runtime/`, or `%LOCALAPPDATA%\Nebula`.
+1. **Read-Only Trees:** Tests must NEVER modify `native/garigari/`, `native/`, `runtime/`, or `%LOCALAPPDATA%\Nebula`.
 2. **Host Process Isolation:** Use `ctx.run_host(...)` or `ctx.isolated_host_dirs(...)` inside `ctx.temp_dir()`. `run_host()` automatically injects unique absolute `--saves` and `--crash-dumps` directories (plus `--settings` and `--data` for `Nebula.exe` to satisfy Windows `SW_HIDE` and single-instance mutex rules) and scans for `nebula-*.txt` / `*.dmp`.
 3. **Zero Repo Artifacts:** Never leave `.pak`, `.sav`, logs, crash dumps, or `__pycache__` inside `tests/smg2_e2e/` (`run_e2e.py` sets `sys.dont_write_bytecode = True`).
 4. **No Silent Skip:** In normal `--tier` mode, missing binaries or unimplemented subsystems must return `FAIL` via `ctx.fail_result(...)` or `AssertionError` / `E2ETestFailure`.
