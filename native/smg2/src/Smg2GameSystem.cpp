@@ -185,7 +185,7 @@ extern "C" void nebula_game_main(void) {
             host->frame_wait(host->user);
         }
         if (host != nullptr && host->frame_begun != nullptr) {
-            host->frame_begun(host->user, 1, frame);
+            host->frame_begun(host->user, 0, frame);
         }
         pGameSystem->frameLoop();
         Smg2Render::submitFrame(frame);
