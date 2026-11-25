@@ -26,7 +26,11 @@ namespace Smg2Ui {
     void calcAnimLayout(LayoutManager* pMgr);
     void drawLayout(const LayoutManager* pMgr);
     void startRootAnim(LayoutManager* pMgr, const char* pAnimName, u32 layer);
+    bool startRootAnimFallback(LayoutManager* pMgr, const char* pFirst, const char* pSecond, u32 layer);
     bool isRootAnimStopped(const LayoutManager* pMgr, u32 layer);
+    void setTextBoxMessage(LayoutManager* pMgr, const char* pPaneName, const char16_t* pMsg);
+    void setTextBoxNumber(LayoutManager* pMgr, const char* pPaneName, s32 number);
+    void setPaneVisible(LayoutManager* pMgr, const char* pPaneName, bool visible);
 }  // namespace Smg2Ui
 
 namespace {
@@ -41,6 +45,27 @@ namespace {
     LayoutManager* sFileSelectLayout = nullptr;
     bool sTitleWaitStarted = false;
     bool sPressStartWaitStarted = false;
+    bool sFileSelectWaitStarted = false;
+
+    void populateFileSelectPanes(LayoutManager* pLayout, s32 slot) {
+        if (pLayout == nullptr) return;
+        const char* userName = GameDataFunction::getUserName();
+        char16_t userW[32]{};
+        if (userName != nullptr) {
+            for (u32 i = 0; userName[i] != '\0' && i < 31u; ++i) {
+                userW[i] = static_cast<char16_t>(static_cast<u8>(userName[i]));
+            }
+        }
+        const s32 stars = GameDataFunction::calcCurrentPowerStarNum();
+        const s32 misses = GameDataFunction::getPlayerGameOverNum();
+        Smg2Ui::setTextBoxNumber(pLayout, "FileNumber", slot);
+        Smg2Ui::setTextBoxMessage(pLayout, "FileName", userW);
+        Smg2Ui::setTextBoxNumber(pLayout, "Star", stars);
+        Smg2Ui::setTextBoxNumber(pLayout, "StarPiece", 0);
+        Smg2Ui::setTextBoxNumber(pLayout, "MissCounter", misses);
+        Smg2Ui::setPaneVisible(pLayout, "TxtMario", true);
+        Smg2Ui::setPaneVisible(pLayout, "TxtLuigi", false);
+    }
 }  // namespace
 
 GameScene::GameScene()
@@ -95,7 +120,9 @@ void GameScene::enterFileSelect() {
     if (sFileSelectLayout == nullptr) {
         sFileSelectLayout = Smg2Ui::createLayout("FileSelect", true, 2u, 0u, true);
     }
-    Smg2Ui::startRootAnim(sFileSelectLayout, "Appear", 0u);
+    sFileSelectWaitStarted = false;
+    Smg2Ui::startRootAnimFallback(sFileSelectLayout, "Appear", "Wait", 0u);
+    populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
     nebula_log("[SMG2-SCENE] GameScene -> File Select (slot=%d, user='%s', stars=%d)",
                mSelectedFileSlot, GameDataFunction::getUserName(), GameDataFunction::calcCurrentPowerStarNum());
 }
@@ -141,13 +168,13 @@ void GameScene::update() {
 
     if (mPhase == Phase_Title) {
         sTitleSeq.update();
-        if (!sTitleWaitStarted && Smg2Ui::isRootAnimStopped(sTitleLogoLayout, 0u)) {
+        if (Smg2Ui::isRootAnimStopped(sTitleLogoLayout, 0u)) {
             sTitleWaitStarted = true;
-            Smg2Ui::startRootAnim(sTitleLogoLayout, "Wait", 0u);
+            Smg2Ui::startRootAnimFallback(sTitleLogoLayout, "Wait", "Loop", 0u);
         }
-        if (!sPressStartWaitStarted && Smg2Ui::isRootAnimStopped(sPressStartLayout, 0u)) {
+        if (Smg2Ui::isRootAnimStopped(sPressStartLayout, 0u)) {
             sPressStartWaitStarted = true;
-            Smg2Ui::startRootAnim(sPressStartLayout, "Wait", 0u);
+            Smg2Ui::startRootAnimFallback(sPressStartLayout, "Wait", "Loop", 0u);
         }
         Smg2Ui::movementLayout(sTitleLogoLayout);
         Smg2Ui::movementLayout(sPressStartLayout);
@@ -157,11 +184,17 @@ void GameScene::update() {
             enterFileSelect();
         }
     } else if (mPhase == Phase_FileSelect) {
+        if (Smg2Ui::isRootAnimStopped(sFileSelectLayout, 0u)) {
+            sFileSelectWaitStarted = true;
+            Smg2Ui::startRootAnimFallback(sFileSelectLayout, "Wait", "Loop", 0u);
+        }
         Smg2Ui::movementLayout(sFileSelectLayout);
         if ((pressed & NEBULA_BUTTON_UP) != 0u || (pressed & NEBULA_BUTTON_LEFT) != 0u) {
             mSelectedFileSlot = mSelectedFileSlot > 1 ? mSelectedFileSlot - 1 : 3;
+            populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
         } else if ((pressed & NEBULA_BUTTON_DOWN) != 0u || (pressed & NEBULA_BUTTON_RIGHT) != 0u) {
             mSelectedFileSlot = mSelectedFileSlot < 3 ? mSelectedFileSlot + 1 : 1;
+            populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
         } else if ((pressed & (NEBULA_BUTTON_A | NEBULA_BUTTON_PLUS)) != 0u) {
             sTitleSeq.setSelectedSlot(mSelectedFileSlot);
             sTitleSeq.decide();

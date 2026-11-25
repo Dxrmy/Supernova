@@ -164,6 +164,7 @@ add_library(smg2_petari_ui STATIC
     "${nebula_native}/petari/src/Game/Util/DrawUtil.cpp"
     "${nebula_native}/petari/src/Game/Util/DirectDraw.cpp"
     "${nebula_native}/petari/src/Game/Util/StringUtil.cpp"
+    "${nebula_native}/petari/src/Game/Util/Table.cpp"
     "${nebula_native}/petari/src/Game/Util/MemoryUtil.cpp"
     "${nebula_native}/petari/src/Game/Util/TextString.cpp"
     src/Smg2PetariBridge.cpp

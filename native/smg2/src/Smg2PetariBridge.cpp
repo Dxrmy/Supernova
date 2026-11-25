@@ -5,14 +5,18 @@
 #include "Game/System/GameAssets.hpp"
 #include "Game/System/GameSystemFontHolder.hpp"
 #include "Game/System/LayoutHolder.hpp"
+#include "Game/System/MessageHolder.hpp"
 #include "Game/System/NebulaFrameClock.hpp"
 #include "Game/Util/FileUtil.hpp"
 #include "Game/Util/ScreenUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
+#include "Game/Util/Table.hpp"
 #include "Game/Screen/LayoutActor.hpp"
+#include "Game/Screen/LayoutCoreUtil.hpp"
 #include "Game/Screen/LayoutManager.hpp"
 #include "Game/Screen/LayoutPaneCtrl.hpp"
 #include <Game/Ui/ResFont.hpp>
+#include <Game/Ui/TextBox.hpp>
 #include <nebula_module.h>
 
 #include <cstring>
@@ -71,6 +75,180 @@ namespace {
         sCinemaFont = loadFontFromFolder(sFontFolder, "CinemaFont26.brfnt");
         nebula_log("[SMG2-UI] Loaded fonts from game.pak: msg=%p menu=%p num=%p pic=%p",
                    sMessageFont, sMenuFont, sNumberFont, sPictureFont);
+    }
+
+    struct MsbtEntry {
+        const char* label;
+        const char16_t* text;
+    };
+    MsbtEntry* sMsbtEntries = nullptr;
+    u32 sMsbtCount = 0;
+    u32 sMsbtRoom = 0;
+    bool sMessageInitAttempted = false;
+
+    u16 readU16(const u8* p, bool be) {
+        return be ? static_cast<u16>((static_cast<u16>(p[0]) << 8) | p[1])
+                  : static_cast<u16>(static_cast<u16>(p[0]) | (static_cast<u16>(p[1]) << 8));
+    }
+
+    u32 readU32(const u8* p, bool be) {
+        return be ? ((static_cast<u32>(p[0]) << 24) | (static_cast<u32>(p[1]) << 16) |
+                     (static_cast<u32>(p[2]) << 8) | static_cast<u32>(p[3]))
+                  : (static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8) |
+                     (static_cast<u32>(p[2]) << 16) | (static_cast<u32>(p[3]) << 24));
+    }
+
+    void addMsbtEntry(const char* label, u32 labelLen, const char16_t* text) {
+        if (sMsbtCount == sMsbtRoom) {
+            const u32 newRoom = sMsbtRoom != 0 ? sMsbtRoom * 2 : 512;
+            auto* next = new (Arenas::permanent(), 0) MsbtEntry[newRoom];
+            if (sMsbtEntries != nullptr && sMsbtCount > 0) {
+                std::memcpy(next, sMsbtEntries, sMsbtCount * sizeof(MsbtEntry));
+            }
+            sMsbtEntries = next;
+            sMsbtRoom = newRoom;
+        }
+        char* copy = new (Arenas::permanent(), 0) char[labelLen + 1];
+        std::memcpy(copy, label, labelLen);
+        copy[labelLen] = '\0';
+        sMsbtEntries[sMsbtCount++] = MsbtEntry{copy, text};
+    }
+
+    void parseMsbtFile(const u8* data, u32 size) {
+        if (data == nullptr || size < 0x20 || std::memcmp(data, "MsgStdBn", 8) != 0) {
+            return;
+        }
+        const bool be = (data[8] == 0xFE && data[9] == 0xFF);
+        const u16 secCount = readU16(data + 0x0E, be);
+
+        const u8* lbl1 = nullptr;
+        u32 lbl1Size = 0;
+        const u8* txt2 = nullptr;
+        u32 txt2Size = 0;
+
+        u32 pos = 0x20;
+        for (u16 s = 0; s < secCount && pos + 0x10 <= size; ++s) {
+            const u32 secSize = readU32(data + pos + 4, be);
+            const u8* secBody = data + pos + 0x10;
+            if (pos + 0x10 + secSize > size) {
+                break;
+            }
+            if (std::memcmp(data + pos, "LBL1", 4) == 0) {
+                lbl1 = secBody;
+                lbl1Size = secSize;
+            } else if (std::memcmp(data + pos, "TXT2", 4) == 0) {
+                txt2 = secBody;
+                txt2Size = secSize;
+            }
+            pos += 0x10 + ((secSize + 15u) & ~15u);
+        }
+
+        if (lbl1 == nullptr || txt2 == nullptr || txt2Size < 4 || lbl1Size < 4) {
+            return;
+        }
+
+        const u32 txtCount = readU32(txt2, be);
+        if (4u + txtCount * 4u > txt2Size) {
+            return;
+        }
+        auto** decodedTexts = new (Arenas::permanent(), 0) const char16_t*[txtCount];
+        for (u32 i = 0; i < txtCount; ++i) {
+            const u32 off = readU32(txt2 + 4u + i * 4u, be);
+            const u32 nextOff = (i + 1u < txtCount) ? readU32(txt2 + 4u + (i + 1u) * 4u, be) : txt2Size;
+            if (off >= txt2Size || nextOff <= off || nextOff > txt2Size) {
+                decodedTexts[i] = u"";
+                continue;
+            }
+            const u32 maxUnits = (nextOff - off) / 2u;
+            auto* buf = new (Arenas::permanent(), 0) char16_t[maxUnits + 1u];
+            u32 out = 0;
+            for (u32 u = 0; u < maxUnits;) {
+                const u16 ch = readU16(txt2 + off + u * 2u, be);
+                if (ch == 0) {
+                    break;
+                }
+                if (ch == 0x000Eu && u + 3u < maxUnits) {
+                    // Skip MSBT control tag (0x000E, group, type, paramByteLen, params...)
+                    const u16 paramBytes = readU16(txt2 + off + (u + 3u) * 2u, be);
+                    u += 4u + (paramBytes + 1u) / 2u;
+                    continue;
+                }
+                buf[out++] = static_cast<char16_t>(ch);
+                u++;
+            }
+            buf[out] = 0;
+            decodedTexts[i] = buf;
+        }
+
+        const u32 groupCount = readU32(lbl1, be);
+        if (4u + groupCount * 8u > lbl1Size) {
+            return;
+        }
+        for (u32 g = 0; g < groupCount; ++g) {
+            const u32 entryCount = readU32(lbl1 + 4u + g * 8u, be);
+            u32 offset = readU32(lbl1 + 8u + g * 8u, be);
+            for (u32 e = 0; e < entryCount && offset < lbl1Size; ++e) {
+                const u8 len = lbl1[offset++];
+                if (offset + len + 4u > lbl1Size) {
+                    break;
+                }
+                const char* labelPtr = reinterpret_cast<const char*>(lbl1 + offset);
+                offset += len;
+                const u32 strIdx = readU32(lbl1 + offset, be);
+                offset += 4u;
+                if (strIdx < txtCount) {
+                    addMsbtEntry(labelPtr, len, decodedTexts[strIdx]);
+                }
+            }
+        }
+    }
+
+    void mountMsbtFolder(const char* folderPath) {
+        if (GameAssets::find(folderPath) < 0) {
+            return;
+        }
+        AssetFolder* folder = AssetFolder::mount(folderPath, Arenas::permanent());
+        if (folder == nullptr) {
+            return;
+        }
+        GameAssets::FolderEntry fe{};
+        for (u32 i = 0; GameAssets::folderEntry(folderPath, i, &fe); ++i) {
+            if (fe.mIsFolder || !MR::isEqualSubString(fe.mName, ".msbt")) {
+                continue;
+            }
+            GameAssets::File file{};
+            if (!GameAssets::open(fe.mEntry, &file)) {
+                continue;
+            }
+            const void* raw = folder->getResource(fe.mName);
+            if (raw != nullptr) {
+                parseMsbtFile(static_cast<const u8*>(raw), file.mLength);
+            }
+        }
+    }
+
+    void ensureMessagesLoaded() {
+        if (sMessageInitAttempted) {
+            return;
+        }
+        sMessageInitAttempted = true;
+        mountMsbtFolder("/LocalizeData/UsEnglish/MessageData/LayoutMessage");
+        mountMsbtFolder("/LocalizeData/UsEnglish/MessageData/SystemMessage");
+        mountMsbtFolder("/LocalizeData/UsEnglish/MessageData/SceneCommonMessage");
+        nebula_log("[SMG2-UI] Loaded MSBT messages: %u entries", sMsbtCount);
+    }
+
+    const char16_t* lookupMessageById(const char* pMessageId) {
+        if (pMessageId == nullptr || pMessageId[0] == '\0') {
+            return nullptr;
+        }
+        ensureMessagesLoaded();
+        for (u32 i = 0; i < sMsbtCount; ++i) {
+            if (std::strcmp(sMsbtEntries[i].label, pMessageId) == 0) {
+                return sMsbtEntries[i].text;
+            }
+        }
+        return nullptr;
     }
 
     bool findLayoutArchivePath(MR::FormattedName& rOut, const char* pPrefix) {
@@ -183,12 +361,26 @@ namespace MR {
         rOut.format("%s_%s", pLayoutName != nullptr ? pLayoutName : "", pPaneName != nullptr ? pPaneName : "");
     }
 
-    const char16_t* getLayoutMessageDirect(const char* /*pMessageId*/) {
+    const char16_t* getLayoutMessageDirect(const char* pMessageId) {
+        if (const char16_t* msg = lookupMessageById(pMessageId)) {
+            nebula_log("[SMG2-UI] LayoutMsg HIT: %s", pMessageId);
+            return msg;
+        }
+        // Fallback: if LayoutName_UserData didn't match, try stripping LayoutName_ prefix
+        if (pMessageId != nullptr) {
+            if (const char* underscore = std::strchr(pMessageId, '_')) {
+                if (const char16_t* msg = lookupMessageById(underscore + 1)) {
+                    nebula_log("[SMG2-UI] LayoutMsg HIT(suffix): %s", underscore + 1);
+                    return msg;
+                }
+            }
+            nebula_log("[SMG2-UI] LayoutMsg MISS: %s", pMessageId);
+        }
         return nullptr;
     }
 
-    const char16_t* getGameMessageDirect(const char* /*pMessageId*/) {
-        return nullptr;
+    const char16_t* getGameMessageDirect(const char* pMessageId) {
+        return lookupMessageById(pMessageId);
     }
 
     u32 getRaceBestTime(int) { return 0u; }
@@ -263,10 +455,53 @@ namespace Smg2Ui {
             pCtrl->start(pAnimName, layer);
         }
     }
+    bool startRootAnimFallback(LayoutManager* pMgr, const char* pFirst, const char* pSecond, u32 layer) {
+        if (pMgr == nullptr) return false;
+        const char* chosen = (pFirst != nullptr && pMgr->getAnimTransform(pFirst) != nullptr)
+                                 ? pFirst
+                                 : ((pSecond != nullptr && pMgr->getAnimTransform(pSecond) != nullptr) ? pSecond : nullptr);
+        if (chosen == nullptr) return false;
+        LayoutPaneCtrl* pCtrl = pMgr->createAndAddRootPaneCtrl(layer + 1u);
+        if (pCtrl != nullptr) {
+            pCtrl->start(chosen, layer);
+            return true;
+        }
+        return false;
+    }
     bool isRootAnimStopped(const LayoutManager* pMgr, u32 layer) {
         if (pMgr == nullptr || pMgr->mLayout == nullptr || pMgr->mLayout->mpRootPane == nullptr) return true;
         LayoutPaneCtrl* pCtrl = pMgr->getPaneCtrl(pMgr->mLayout->mpRootPane->mName);
         return pCtrl == nullptr || pCtrl->isAnimStopped(layer);
+    }
+    static void setTextBoxMessageRecursiveImpl(Ui::Pane* pPane, const char16_t* pMsg) {
+        if (pPane == nullptr || pMsg == nullptr) return;
+        if (Ui::TextBox* pTextBox = Ui::PaneCast<Ui::TextBox>(pPane)) {
+            LayoutCoreUtil::setTextBoxMessage(pTextBox, pMsg);
+        }
+        for (Ui::Pane* pChild : pPane->mChildList) {
+            setTextBoxMessageRecursiveImpl(pChild, pMsg);
+        }
+    }
+    void setTextBoxMessage(LayoutManager* pMgr, const char* pPaneName, const char16_t* pMsg) {
+        if (pMgr == nullptr || pMsg == nullptr) return;
+        if (Ui::Pane* pPane = pMgr->getPane(pPaneName)) {
+            setTextBoxMessageRecursiveImpl(pPane, pMsg);
+        }
+    }
+    void setTextBoxNumber(LayoutManager* pMgr, const char* pPaneName, s32 number) {
+        char16_t buf[32]{};
+        char ascii[32]{};
+        snprintf(ascii, sizeof(ascii), "%d", number);
+        for (size_t i = 0; ascii[i] != '\0' && i < 31u; ++i) {
+            buf[i] = static_cast<char16_t>(ascii[i]);
+        }
+        setTextBoxMessage(pMgr, pPaneName, buf);
+    }
+    void setPaneVisible(LayoutManager* pMgr, const char* pPaneName, bool visible) {
+        if (pMgr == nullptr) return;
+        if (Ui::Pane* pPane = pMgr->getPane(pPaneName)) {
+            pPane->SetVisible(visible);
+        }
     }
 }  // namespace Smg2Ui
 
