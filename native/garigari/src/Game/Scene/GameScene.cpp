@@ -31,12 +31,15 @@ namespace Smg2Ui {
     void setTextBoxMessage(LayoutManager* pMgr, const char* pPaneName, const char16_t* pMsg);
     void setTextBoxNumber(LayoutManager* pMgr, const char* pPaneName, s32 number);
     void setPaneVisible(LayoutManager* pMgr, const char* pPaneName, bool visible);
+    void startPaneAnim(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, u32 layer);
+    bool isPointingPane(const LayoutManager* pMgr, const char* pPaneName, f32 screenX, f32 screenY);
 }  // namespace Smg2Ui
 
 namespace Smg23D {
     void mountStageModels(const char* pStageName);
+    void setMarioAnim(int animState);
     void begin3DScene(f32 camX, f32 camY, f32 camZ, f32 targetX, f32 targetY, f32 targetZ, f32 fovY, f32 nearZ, f32 farZ);
-    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 marioYawRad);
+    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 upX, f32 upY, f32 upZ, f32 marioYawRad);
     void end3DScene();
 }  // namespace Smg23D
 
@@ -53,6 +56,26 @@ namespace {
     bool sTitleWaitStarted = false;
     bool sPressStartWaitStarted = false;
     bool sFileSelectWaitStarted = false;
+    int sFileFocus = 0;       // 0..2 = File 1..3, 3 = Icon (MiiButton), 4 = Erase (DeleteButton)
+    int sPrevFileFocus = -1;
+    bool sConfirmOpen = false;
+
+    const char* focusPaneName(int focus) {
+        switch (focus) {
+        case 3: return "MiiButton";
+        case 4: return "DeleteButton";
+        default: return "StartButton";
+        }
+    }
+
+    void updateFileFocusAnims(LayoutManager* pLayout, int newFocus) {
+        if (pLayout == nullptr || newFocus == sPrevFileFocus) return;
+        if (sPrevFileFocus >= 0) {
+            Smg2Ui::startPaneAnim(pLayout, focusPaneName(sPrevFileFocus), "ButtonSelectOut", 0u);
+        }
+        Smg2Ui::startPaneAnim(pLayout, focusPaneName(newFocus), "ButtonSelectIn", 0u);
+        sPrevFileFocus = newFocus;
+    }
 
     void populateFileSelectPanes(LayoutManager* pLayout, s32 slot) {
         if (pLayout == nullptr) return;
@@ -128,8 +151,12 @@ void GameScene::enterFileSelect() {
         sFileSelectLayout = Smg2Ui::createLayout("FileSelect", true, 2u, 0u, true);
     }
     sFileSelectWaitStarted = false;
+    sFileFocus = (mSelectedFileSlot >= 1 && mSelectedFileSlot <= 3) ? (mSelectedFileSlot - 1) : 0;
+    sPrevFileFocus = -1;
+    sConfirmOpen = false;
     Smg2Ui::startRootAnimFallback(sFileSelectLayout, "Appear", "Wait", 0u);
     populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
+    updateFileFocusAnims(sFileSelectLayout, sFileFocus);
     nebula_log("[SMG2-SCENE] GameScene -> File Select (slot=%d, user='%s', stars=%d)",
                mSelectedFileSlot, GameDataFunction::getUserName(), GameDataFunction::calcCurrentPowerStarNum());
 }
@@ -137,7 +164,8 @@ void GameScene::enterFileSelect() {
 void GameScene::enterStage(const char* pStageName) {
     mPhase = Phase_InStage;
     mPhaseSteps = 0;
-    mActiveStage = pStageName != nullptr ? pStageName : "IslandFleetGalaxy";
+    const char* defaultStage = GameDataFunction::calcCurrentPowerStarNum() > 0 ? "MarioFaceShipGalaxy" : "IslandFleetGalaxy";
+    mActiveStage = pStageName != nullptr ? pStageName : defaultStage;
     if (mStageDataHolder != nullptr) {
         mStageDataHolder->mountStage(mActiveStage);
     }
@@ -147,10 +175,10 @@ void GameScene::enterStage(const char* pStageName) {
         sStagePointGrav.mRange = 5000.0f;
         sStageGravity->registerGravity(&sStagePointGrav);
     }
+    Smg23D::mountStageModels(mActiveStage);
     sCameraDirector.init();
     sCameraDirector.setStageTarget(mActiveStage);
     sMarioActor.init(mActiveStage);
-    Smg23D::mountStageModels(mActiveStage);
     if (GameSystemObjHolder* holder = MR::getGameSystemObjHolder(); holder != nullptr && holder->mAudioSystem != nullptr) {
         holder->mAudioSystem->startStageBgm(mActiveStage);
     }
@@ -163,6 +191,9 @@ void GameScene::update() {
     uint32_t buttons = 0u;
     f32 stickX = 0.0f;
     f32 stickY = 0.0f;
+    f32 ptrX = 0.0f;
+    f32 ptrY = 0.0f;
+    bool hasPtr = false;
     const NebulaHostServices* host = nebula_host();
     if (host != nullptr && host->input_read != nullptr) {
         NebulaInputSample sample{};
@@ -170,6 +201,11 @@ void GameScene::update() {
         buttons = sample.buttons;
         stickX = sample.stick[0];
         stickY = sample.stick[1];
+        if (sample.pointer_on != 0u) {
+            ptrX = sample.pointer[0] * 416.0f;
+            ptrY = sample.pointer[1] * 228.0f;
+            hasPtr = true;
+        }
     }
     const uint32_t pressed = buttons & ~sPrevButtons;
     sPrevButtons = buttons;
@@ -196,29 +232,62 @@ void GameScene::update() {
             sFileSelectWaitStarted = true;
             Smg2Ui::startRootAnimFallback(sFileSelectLayout, "Wait", "Loop", 0u);
         }
+        if (hasPtr && !sConfirmOpen) {
+            if (Smg2Ui::isPointingPane(sFileSelectLayout, "PicMii", ptrX, ptrY)) {
+                sFileFocus = 3;
+            } else if (Smg2Ui::isPointingPane(sFileSelectLayout, "PicDelete", ptrX, ptrY)) {
+                sFileFocus = 4;
+            } else if (Smg2Ui::isPointingPane(sFileSelectLayout, "BoxStartButton", ptrX, ptrY)) {
+                sFileFocus = mSelectedFileSlot - 1;
+            }
+        }
+        if (!sConfirmOpen) {
+            if ((pressed & NEBULA_BUTTON_UP) != 0u) {
+                sFileFocus = (sFileFocus >= 3) ? (mSelectedFileSlot - 1) : (sFileFocus > 0 ? sFileFocus - 1 : 3);
+            } else if ((pressed & NEBULA_BUTTON_DOWN) != 0u) {
+                sFileFocus = (sFileFocus < 2) ? (sFileFocus + 1) : (sFileFocus == 2 ? 3 : 0);
+            } else if ((pressed & NEBULA_BUTTON_LEFT) != 0u) {
+                sFileFocus = (sFileFocus == 4) ? 3 : (sFileFocus == 3 ? 0 : (mSelectedFileSlot > 1 ? mSelectedFileSlot - 2 : 2));
+            } else if ((pressed & NEBULA_BUTTON_RIGHT) != 0u) {
+                sFileFocus = (sFileFocus == 3) ? 4 : (sFileFocus < 3 ? (sFileFocus + 1) % 3 : 0);
+            }
+            if (sFileFocus >= 0 && sFileFocus <= 2 && mSelectedFileSlot != sFileFocus + 1) {
+                mSelectedFileSlot = sFileFocus + 1;
+                populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
+            }
+            updateFileFocusAnims(sFileSelectLayout, sFileFocus);
+        }
         Smg2Ui::movementLayout(sFileSelectLayout);
-        if ((pressed & NEBULA_BUTTON_UP) != 0u || (pressed & NEBULA_BUTTON_LEFT) != 0u) {
-            mSelectedFileSlot = mSelectedFileSlot > 1 ? mSelectedFileSlot - 1 : 3;
-            populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
-        } else if ((pressed & NEBULA_BUTTON_DOWN) != 0u || (pressed & NEBULA_BUTTON_RIGHT) != 0u) {
-            mSelectedFileSlot = mSelectedFileSlot < 3 ? mSelectedFileSlot + 1 : 1;
-            populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
-        } else if ((pressed & (NEBULA_BUTTON_A | NEBULA_BUTTON_PLUS)) != 0u) {
-            sTitleSeq.setSelectedSlot(mSelectedFileSlot);
-            sTitleSeq.decide();
-            enterStage("IslandFleetGalaxy");
+        if ((pressed & (NEBULA_BUTTON_A | NEBULA_BUTTON_PLUS)) != 0u) {
+            Smg2Ui::startPaneAnim(sFileSelectLayout, focusPaneName(sFileFocus), "ButtonReaction", 0u);
+            if (!sConfirmOpen && sFileFocus <= 2) {
+                sConfirmOpen = true;
+                Smg2Ui::setTextBoxMessage(sFileSelectLayout, "StartButton", u"Start this file?");
+                nebula_log("[SMG2-UI] FileSelect slot %d: Start this file? (A=Confirm, B=Cancel)", mSelectedFileSlot);
+            } else if (sConfirmOpen) {
+                Smg2Ui::startPaneAnim(sFileSelectLayout, "StartButton", "ButtonDecide", 0u);
+                sTitleSeq.setSelectedSlot(mSelectedFileSlot);
+                sTitleSeq.decide();
+                enterStage(nullptr);
+            }
         } else if ((pressed & NEBULA_BUTTON_B) != 0u) {
-            mPhase = Phase_Title;
-            mPhaseSteps = 0;
-            mActiveStage = "Title";
-            sTitleWaitStarted = false;
-            sPressStartWaitStarted = false;
-            Smg2Ui::startRootAnim(sTitleLogoLayout, "Appear", 0u);
-            Smg2Ui::startRootAnim(sPressStartLayout, "Appear", 0u);
+            if (sConfirmOpen) {
+                sConfirmOpen = false;
+                Smg2Ui::setTextBoxMessage(sFileSelectLayout, "StartButton", u"Start");
+            } else {
+                mPhase = Phase_Title;
+                mPhaseSteps = 0;
+                mActiveStage = "Title";
+                sTitleWaitStarted = false;
+                sPressStartWaitStarted = false;
+                Smg2Ui::startRootAnim(sTitleLogoLayout, "Appear", 0u);
+                Smg2Ui::startRootAnim(sPressStartLayout, "Appear", 0u);
+            }
         }
     } else {
         sCameraDirector.update(stickX, stickY);
         sMarioActor.update(stickX, stickY, buttons, sStageGravity);
+        Smg23D::setMarioAnim(sMarioActor.getAnimState());
     }
 }
 
@@ -239,13 +308,14 @@ void GameScene::draw() const {
         Smg2Ui::drawLayout(sFileSelectLayout);
     } else {
         const TVec3f& pos = sMarioActor.getPosition();
+        const TVec3f& up = sMarioActor.getUpVec();
         const f32 yaw = sCameraDirector.getYaw();
         const f32 camDist = 1100.0f;
-        const f32 camX = pos.x + camDist * __builtin_sinf(yaw);
-        const f32 camY = pos.y + 400.0f;
-        const f32 camZ = pos.z + camDist * __builtin_cosf(yaw);
-        Smg23D::begin3DScene(camX, camY, camZ, pos.x, pos.y + 100.0f, pos.z, 60.0f, 10.0f, 100000.0f);
-        Smg23D::drawStageAndMario(pos.x, pos.y, pos.z, 0.0f);
+        const f32 camX = pos.x + camDist * __builtin_sinf(yaw) + up.x * 400.0f;
+        const f32 camY = pos.y + up.y * 400.0f;
+        const f32 camZ = pos.z + camDist * __builtin_cosf(yaw) + up.z * 400.0f;
+        Smg23D::begin3DScene(camX, camY, camZ, pos.x + up.x * 100.0f, pos.y + up.y * 100.0f, pos.z + up.z * 100.0f, 60.0f, 10.0f, 100000.0f);
+        Smg23D::drawStageAndMario(pos.x, pos.y, pos.z, up.x, up.y, up.z, sMarioActor.getYaw());
         Smg23D::end3DScene();
     }
 }

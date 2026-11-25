@@ -8,9 +8,14 @@
 #include "Game/System/MessageHolder.hpp"
 #include "Game/System/NebulaFrameClock.hpp"
 #include "Game/Util/FileUtil.hpp"
+#include "Game/Util/MtxUtil.hpp"
 #include "Game/Util/ScreenUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
 #include "Game/Util/Table.hpp"
+#include "Game/Animation/XanimeCore.hpp"
+#include "Game/Map/CollisionCode.hpp"
+#include "Game/Map/KCollision.hpp"
+#include "Game/Render/Clip.hpp"
 #include "Game/Render/FrameList.hpp"
 #include "Game/Render/Material.hpp"
 #include "Game/Render/Model.hpp"
@@ -410,7 +415,59 @@ namespace MR {
     static Pos3f sIdentityView;
     const Proj3f& getCameraProjectionMtx() { return sIdentityProj; }
     const Pos3f& getCameraViewMtx() { return sIdentityView; }
+
+    void vecBlend(const Vec3f& a, const Vec3f& b, Vec3f* out, f32 t) {
+        if (out == nullptr) return;
+        out->x = a.x + (b.x - a.x) * t;
+        out->y = a.y + (b.y - a.y) * t;
+        out->z = a.z + (b.z - a.z) * t;
+    }
+    void extractMtxTrans(MtxPtr mtx, Vec3f* out) {
+        if (out == nullptr) return;
+        out->set(mtx[0][3], mtx[1][3], mtx[2][3]);
+    }
+    bool isNearZero(const Vec3f& v, f32 eps) {
+        return (v.x * v.x + v.y * v.y + v.z * v.z) <= eps * eps;
+    }
+    bool isSameDirection(const Vec3f& a, const Vec3f& b, f32 eps) {
+        const f32 cx = a.y * b.z - a.z * b.y;
+        const f32 cy = a.z * b.x - a.x * b.z;
+        const f32 cz = a.x * b.y - a.y * b.x;
+        return (cx * cx + cy * cy + cz * cz) <= eps * eps && (a.x * b.x + a.y * b.y + a.z * b.z) > 0.0f;
+    }
+    void separateScalarAndDirection(f32* scalar, Vec3f* dir, const Vec3f& src) {
+        const f32 len = __builtin_sqrtf(src.x * src.x + src.y * src.y + src.z * src.z);
+        if (scalar) *scalar = len;
+        if (dir) {
+            if (len > 1.0e-6f) {
+                const f32 inv = 1.0f / len;
+                dir->set(src.x * inv, src.y * inv, src.z * inv);
+            } else {
+                dir->set(0.0f, 0.0f, 0.0f);
+            }
+        }
+    }
+    void createBoundingBox(const Vec3f* pts, u32 count, Vec3f* minOut, Vec3f* maxOut) {
+        if (pts == nullptr || count == 0 || minOut == nullptr || maxOut == nullptr) return;
+        *minOut = pts[0];
+        *maxOut = pts[0];
+        for (u32 i = 1; i < count; ++i) {
+            if (pts[i].x < minOut->x) minOut->x = pts[i].x;
+            if (pts[i].y < minOut->y) minOut->y = pts[i].y;
+            if (pts[i].z < minOut->z) minOut->z = pts[i].z;
+            if (pts[i].x > maxOut->x) maxOut->x = pts[i].x;
+            if (pts[i].y > maxOut->y) maxOut->y = pts[i].y;
+            if (pts[i].z > maxOut->z) maxOut->z = pts[i].z;
+        }
+    }
 }  // namespace MR
+class CollisionDirector;
+namespace MR {
+    CollisionDirector* getCollisionDirector() { return nullptr; }
+    void registerCameraCode(u32) {}
+}  // namespace MR
+
+u32 CollisionCode::getCameraID(const TableIter&) { return 0u; }
 
 class SoundHandle;
 namespace MR {
@@ -508,23 +565,79 @@ namespace Smg2Ui {
             pPane->SetVisible(visible);
         }
     }
+    void startPaneAnim(LayoutManager* pMgr, const char* pPaneName, const char* pAnimName, u32 layer) {
+        if (pMgr == nullptr || pPaneName == nullptr || pAnimName == nullptr) return;
+        if (pMgr->getAnimTransform(pAnimName) == nullptr) return;
+        LayoutPaneCtrl* pCtrl = pMgr->createAndAddPaneCtrl(pPaneName, layer + 1u);
+        if (pCtrl != nullptr) {
+            pCtrl->start(pAnimName, layer);
+        }
+    }
+    bool isPointingPane(const LayoutManager* pMgr, const char* pPaneName, f32 screenX, f32 screenY) {
+        if (pMgr == nullptr || pPaneName == nullptr) return false;
+        Vec2f pt;
+        pt.x = screenX;
+        pt.y = screenY;
+        return pMgr->isPointing(pPaneName, pt);
+    }
 }  // namespace Smg2Ui
 
 namespace Smg23D {
     namespace {
         Model* sMarioModel = nullptr;
+        XanimeCore* sMarioAnimCore = nullptr;
+        Clip* sMarioClips[3]{};  // 0=Wait, 1=Run, 2=Jump
+        int sMarioAnimState = 0;
+
         constexpr u32 kMaxStageModels = 16;
         Model* sStageModels[kMaxStageModels]{};
         u32 sStageModelCount = 0;
+        Model* sSkyModel = nullptr;
+        KCollisionServer* sKclServers[kMaxStageModels]{};
+        u32 sKclCount = 0;
+        f32 sCamPosX = 0.0f, sCamPosY = 0.0f, sCamPosZ = 0.0f;
         bool sStageModelsMounted = false;
 
-        Model* loadModelFromArchive(const char* archivePath, const char* preferredName) {
+        Clip* loadClipFromArchive(const char* archivePath, const char* const* names, u32 nameCount, const ModelData* pModelData) {
+            if (GameAssets::find(archivePath) < 0) return nullptr;
+            AssetFolder* folder = AssetFolder::mount(archivePath, Arenas::permanent());
+            if (folder == nullptr) return nullptr;
+            for (u32 i = 0; i < nameCount; ++i) {
+                void* res = folder->getResource(names[i]);
+                if (res != nullptr) {
+                    Clip* clip = Clip::load(res);
+                    if (clip != nullptr) {
+                        if (pModelData != nullptr) clip->bind(pModelData);
+                        nebula_log("[SMG2-3D] Loaded Mario clip %s/%s (frames=%d)", archivePath, names[i], clip->getFrameMax());
+                        return clip;
+                    }
+                }
+            }
+            return nullptr;
+        }
+
+        Model* loadModelFromArchive(const char* archivePath, const char* preferredName, bool loadKcl) {
             if (GameAssets::find(archivePath) < 0) {
                 return nullptr;
             }
             AssetFolder* folder = AssetFolder::mount(archivePath, Arenas::permanent());
             if (folder == nullptr) {
                 return nullptr;
+            }
+            if (loadKcl && sKclCount < kMaxStageModels) {
+                GameAssets::FolderEntry fe{};
+                for (u32 i = 0; GameAssets::folderEntry(archivePath, i, &fe); ++i) {
+                    if (!fe.mIsFolder && MR::isEqualSubString(fe.mName, ".kcl")) {
+                        void* kclRes = folder->getResource(fe.mName);
+                        if (kclRes != nullptr) {
+                            auto* srv = new (Arenas::permanent(), 0) KCollisionServer();
+                            srv->setData(kclRes);
+                            sKclServers[sKclCount++] = srv;
+                            nebula_log("[SMG2-3D] Mounted KCL %s/%s (tris=%d)", archivePath, fe.mName, srv->getTriangleNum());
+                        }
+                        break;
+                    }
+                }
             }
             void* res = nullptr;
             const char* foundName = nullptr;
@@ -560,9 +673,29 @@ namespace Smg23D {
 
     void mountStageModels(const char* pStageName) {
         if (sMarioModel == nullptr) {
-            sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bdl");
+            sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bdl", false);
             if (sMarioModel == nullptr) {
-                sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bmd");
+                sMarioModel = loadModelFromArchive("/ObjectData/Mario", "Mario.bmd", false);
+            }
+            if (sMarioModel != nullptr && sMarioModel->getModelData() != nullptr) {
+                ModelData* pMarioData = sMarioModel->getModelData();
+                sMarioAnimCore = new (Arenas::permanent(), 0) XanimeCore(pMarioData->getJointCount(), 1u, pMarioData->getScaleMode());
+                sMarioAnimCore->enableJointTransform(pMarioData);
+                for (u32 j = 0; j < pMarioData->getJointCount(); ++j) {
+                    pMarioData->getJointAt(j)->setMtxCalc(sMarioAnimCore);
+                }
+                static const char* const kWaitNames[] = { "Wait.bck", "Wait.bca", "wait.bck" };
+                static const char* const kRunNames[] = { "Run.bck", "Dash.bck", "Walk.bck", "Run.bca" };
+                static const char* const kJumpNames[] = { "Jump.bck", "JumpStart.bck", "Fall.bck", "Jump.bca" };
+                sMarioClips[0] = loadClipFromArchive("/ObjectData/Mario", kWaitNames, 3u, pMarioData);
+                if (sMarioClips[0] == nullptr) sMarioClips[0] = loadClipFromArchive("/ObjectData/MarioAnime", kWaitNames, 3u, pMarioData);
+                sMarioClips[1] = loadClipFromArchive("/ObjectData/Mario", kRunNames, 4u, pMarioData);
+                if (sMarioClips[1] == nullptr) sMarioClips[1] = loadClipFromArchive("/ObjectData/MarioAnime", kRunNames, 4u, pMarioData);
+                sMarioClips[2] = loadClipFromArchive("/ObjectData/Mario", kJumpNames, 4u, pMarioData);
+                if (sMarioClips[2] == nullptr) sMarioClips[2] = loadClipFromArchive("/ObjectData/MarioAnime", kJumpNames, 4u, pMarioData);
+                if (sMarioClips[0] != nullptr) {
+                    sMarioAnimCore->setBck(0u, sMarioClips[0]);
+                }
             }
         }
         if (sStageModelsMounted) {
@@ -570,7 +703,6 @@ namespace Smg23D {
         }
         sStageModelsMounted = true;
 
-        // Mount planet/sky models matching the stage prefix (e.g., IslandFleet* for IslandFleetGalaxy)
         char prefix[64]{};
         if (pStageName != nullptr) {
             std::strncpy(prefix, pStageName, sizeof(prefix) - 1u);
@@ -580,24 +712,133 @@ namespace Smg23D {
         }
         if (prefix[0] != '\0') {
             GameAssets::FolderEntry fe{};
-            for (u32 i = 0; sStageModelCount < kMaxStageModels && GameAssets::folderEntry("/ObjectData", i, &fe); ++i) {
+            for (u32 i = 0; GameAssets::folderEntry("/ObjectData", i, &fe); ++i) {
                 if (!fe.mIsFolder) continue;
-                if (MR::isEqualSubString(fe.mName, prefix) &&
-                    (MR::isEqualSubString(fe.mName, "Planet") || MR::isEqualSubString(fe.mName, "Sky") ||
-                     MR::isEqualSubString(fe.mName, "Start") || MR::isEqualSubString(fe.mName, "Island"))) {
+                if (MR::isEqualSubString(fe.mName, prefix)) {
                     char path[128]{};
                     snprintf(path, sizeof(path), "/ObjectData/%s", fe.mName);
-                    if (Model* m = loadModelFromArchive(path, nullptr)) {
-                        sStageModels[sStageModelCount++] = m;
+                    if (MR::isEqualSubString(fe.mName, "Sky") && sSkyModel == nullptr) {
+                        sSkyModel = loadModelFromArchive(path, nullptr, false);
+                    } else if (sStageModelCount < kMaxStageModels &&
+                               (MR::isEqualSubString(fe.mName, "Planet") || MR::isEqualSubString(fe.mName, "Start") ||
+                                MR::isEqualSubString(fe.mName, "Island") || MR::isEqualSubString(fe.mName, "FaceShip"))) {
+                        if (Model* m = loadModelFromArchive(path, nullptr, true)) {
+                            sStageModels[sStageModelCount++] = m;
+                        }
                     }
                 }
             }
         }
-        nebula_log("[SMG2-3D] Stage '%s' models ready: mario=%p, stageModels=%u",
-                   pStageName != nullptr ? pStageName : "", sMarioModel, sStageModelCount);
+        if (sSkyModel == nullptr) {
+            static const char* const kFallbackSkies[] = {
+                "/ObjectData/StarrySky",
+                "/ObjectData/MilkyWaySky",
+                "/ObjectData/IslandFleetSky",
+                "/ObjectData/BlueSky",
+            };
+            for (const char* skyPath : kFallbackSkies) {
+                if ((sSkyModel = loadModelFromArchive(skyPath, nullptr, false)) != nullptr) {
+                    break;
+                }
+            }
+        }
+        nebula_log("[SMG2-3D] Stage '%s' ready: mario=%p, stageModels=%u, kcl=%u, sky=%p",
+                   pStageName != nullptr ? pStageName : "", sMarioModel, sStageModelCount, sKclCount, sSkyModel);
+    }
+
+    bool resolveSphereCollision(f32* ioX, f32* ioY, f32* ioZ, f32 radius, f32* outNormalX, f32* outNormalY, f32* outNormalZ) {
+        if (sKclCount == 0u || ioX == nullptr || ioY == nullptr || ioZ == nullptr) return false;
+        bool hitAny = false;
+        f32 bestNx = 0.0f, bestNy = 1.0f, bestNz = 0.0f;
+        Vec3f center(*ioX, *ioY, *ioZ);
+        for (u32 k = 0; k < sKclCount; ++k) {
+            KCollisionServer* srv = sKclServers[k];
+            if (srv == nullptr) continue;
+            KC_PrismData* prisms[8]{};
+            f32 dists[8]{};
+            u8 parts[8]{};
+            const u32 hits = srv->checkSphere(&center, radius, 0.0f, 8u, prisms, dists, parts);
+            for (u32 h = 0; h < hits; ++h) {
+                if (prisms[h] == nullptr) continue;
+                const f32 pen = radius - dists[h];
+                if (pen > 0.0f) {
+                    const Vec3f* n = srv->getFaceNormal(prisms[h]);
+                    if (n != nullptr) {
+                        center.x += n->x * pen;
+                        center.y += n->y * pen;
+                        center.z += n->z * pen;
+                        bestNx = n->x;
+                        bestNy = n->y;
+                        bestNz = n->z;
+                        hitAny = true;
+                    }
+                }
+            }
+        }
+        if (hitAny) {
+            *ioX = center.x;
+            *ioY = center.y;
+            *ioZ = center.z;
+            if (outNormalX) *outNormalX = bestNx;
+            if (outNormalY) *outNormalY = bestNy;
+            if (outNormalZ) *outNormalZ = bestNz;
+        }
+        return hitAny;
+    }
+
+    bool raycastPlanet(f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz, f32 maxDist,
+                       f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz) {
+        if (sKclCount == 0u) return false;
+        const Vec3f origin(x, y, z);
+        const Vec3f dir(dx * maxDist, dy * maxDist, dz * maxDist);
+        f32 bestT = 2.0f;
+        Vec3f bestN(0.0f, 1.0f, 0.0f);
+        bool found = false;
+        for (u32 k = 0; k < sKclCount; ++k) {
+            KCollisionServer* srv = sKclServers[k];
+            if (srv == nullptr) continue;
+            f32 dists[4]{};
+            u8 parts[4]{};
+            u32 count = 0;
+            KC_PrismData* prisms[4]{};
+            if (srv->checkArrow(origin, dir, dists, parts, &count, prisms, 4u) != nullptr) {
+                for (u32 i = 0; i < count; ++i) {
+                    if (prisms[i] != nullptr && dists[i] >= 0.0f && dists[i] < bestT) {
+                        bestT = dists[i];
+                        if (const Vec3f* n = srv->getFaceNormal(prisms[i])) {
+                            bestN = *n;
+                        }
+                        found = true;
+                    }
+                }
+            }
+        }
+        if (found) {
+            if (outX) *outX = origin.x + dir.x * bestT;
+            if (outY) *outY = origin.y + dir.y * bestT;
+            if (outZ) *outZ = origin.z + dir.z * bestT;
+            if (outNx) *outNx = bestN.x;
+            if (outNy) *outNy = bestN.y;
+            if (outNz) *outNz = bestN.z;
+        }
+        return found;
+    }
+
+    void setMarioAnim(int animState) {
+        if (animState < 0 || animState >= 3) animState = 0;
+        if (sMarioAnimState != animState) {
+            sMarioAnimState = animState;
+            if (sMarioAnimCore != nullptr && sMarioClips[animState] != nullptr) {
+                sMarioClips[animState]->setFrame(0.0f);
+                sMarioAnimCore->setBck(0u, sMarioClips[animState]);
+            }
+        }
     }
 
     void begin3DScene(f32 camX, f32 camY, f32 camZ, f32 targetX, f32 targetY, f32 targetZ, f32 fovY, f32 nearZ, f32 farZ) {
+        sCamPosX = camX;
+        sCamPosY = camY;
+        sCamPosZ = camZ;
         Point3d camPos = { camX, camY, camZ };
         Vec upVec = { 0.0f, 1.0f, 0.0f };
         Point3d targetPos = { targetX, targetY, targetZ };
@@ -616,15 +857,8 @@ namespace Smg23D {
         ModelSys::mViewRole = NEBULA_CAMERA_SCENE;
     }
 
-    static void drawSingleModel(Model* pModel, f32 x, f32 y, f32 z, f32 yawRad) {
+    static void drawModelWithMtx(Model* pModel, const Mtx baseMtx) {
         if (pModel == nullptr || pModel->getModelData() == nullptr) return;
-        Mtx baseMtx;
-        const f32 c = __builtin_cosf(yawRad);
-        const f32 s = __builtin_sinf(yawRad);
-        baseMtx[0][0] = c;    baseMtx[0][1] = 0.0f; baseMtx[0][2] = s;    baseMtx[0][3] = x;
-        baseMtx[1][0] = 0.0f; baseMtx[1][1] = 1.0f; baseMtx[1][2] = 0.0f; baseMtx[1][3] = y;
-        baseMtx[2][0] = -s;   baseMtx[2][1] = 0.0f; baseMtx[2][2] = c;    baseMtx[2][3] = z;
-
         pModel->setBaseTRMtx(baseMtx);
         pModel->calc();
         pModel->viewCalc();
@@ -643,11 +877,50 @@ namespace Smg23D {
         }
     }
 
-    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 marioYawRad) {
+    static void drawSingleModel(Model* pModel, f32 x, f32 y, f32 z, f32 yawRad) {
+        Mtx baseMtx;
+        const f32 c = __builtin_cosf(yawRad);
+        const f32 s = __builtin_sinf(yawRad);
+        baseMtx[0][0] = c;    baseMtx[0][1] = 0.0f; baseMtx[0][2] = s;    baseMtx[0][3] = x;
+        baseMtx[1][0] = 0.0f; baseMtx[1][1] = 1.0f; baseMtx[1][2] = 0.0f; baseMtx[1][3] = y;
+        baseMtx[2][0] = -s;   baseMtx[2][1] = 0.0f; baseMtx[2][2] = c;    baseMtx[2][3] = z;
+        drawModelWithMtx(pModel, baseMtx);
+    }
+
+    void drawStageAndMario(f32 marioX, f32 marioY, f32 marioZ, f32 upX, f32 upY, f32 upZ, f32 marioYawRad) {
+        if (sSkyModel != nullptr) {
+            drawSingleModel(sSkyModel, sCamPosX, sCamPosY, sCamPosZ, 0.0f);
+        }
         for (u32 i = 0; i < sStageModelCount; ++i) {
             drawSingleModel(sStageModels[i], 0.0f, 0.0f, 0.0f, 0.0f);
         }
-        drawSingleModel(sMarioModel, marioX, marioY, marioZ, marioYawRad);
+        if (sMarioClips[sMarioAnimState] != nullptr) {
+            Clip* clip = sMarioClips[sMarioAnimState];
+            f32 nextFrame = clip->getFrame() + 1.0f;
+            if (nextFrame >= static_cast<f32>(clip->getFrameMax())) {
+                nextFrame = 0.0f;
+            }
+            clip->setFrame(nextFrame);
+        }
+        // Build Mario orientation matrix from surface normal (up) and heading (marioYawRad)
+        f32 ux = upX, uy = upY, uz = upZ;
+        const f32 uLen = __builtin_sqrtf(ux * ux + uy * uy + uz * uz);
+        if (uLen > 1.0e-5f) { ux /= uLen; uy /= uLen; uz /= uLen; } else { ux = 0.0f; uy = 1.0f; uz = 0.0f; }
+        f32 fx = __builtin_sinf(marioYawRad), fy = 0.0f, fz = __builtin_cosf(marioYawRad);
+        const f32 dot = fx * ux + fy * uy + fz * uz;
+        fx -= ux * dot; fy -= uy * dot; fz -= uz * dot;
+        const f32 fLen = __builtin_sqrtf(fx * fx + fy * fy + fz * fz);
+        if (fLen > 1.0e-5f) { fx /= fLen; fy /= fLen; fz /= fLen; } else { fx = 0.0f; fy = 0.0f; fz = 1.0f; }
+        // right = up x forward
+        const f32 rx = uy * fz - uz * fy;
+        const f32 ry = uz * fx - ux * fz;
+        const f32 rz = ux * fy - uy * fx;
+
+        Mtx marioMtx;
+        marioMtx[0][0] = rx; marioMtx[0][1] = ux; marioMtx[0][2] = fx; marioMtx[0][3] = marioX;
+        marioMtx[1][0] = ry; marioMtx[1][1] = uy; marioMtx[1][2] = fy; marioMtx[1][3] = marioY;
+        marioMtx[2][0] = rz; marioMtx[2][1] = uz; marioMtx[2][2] = fz; marioMtx[2][3] = marioZ;
+        drawModelWithMtx(sMarioModel, marioMtx);
     }
 
     void end3DScene() {
