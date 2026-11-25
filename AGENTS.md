@@ -19,3 +19,10 @@ Every session, compaction, and `/teamwork` subagent working in `C:\Users\kmric\p
 
 5. **NO SILENT FALLBACKS:**
    If a real subsystem hits a hard dependency wall, STOP and report the exact unresolved symbols/TUs instead of quietly substituting ad-hoc code.
+
+6. **QUOTA BUDGET CHECK (Before Big Tasks or `/teamwork`):**
+   Before spawning `/teamwork` or starting a new milestone, read `C:\Users\kmric\.gemini\antigravity-cli\quota_summary.json`. Follow `recommended_mode`:
+   - `teamwork_ok` (>= 35%): `/teamwork` allowed (keep low token I/O).
+   - `single_agent_only` (12%-35%): single-agent mode only (no `/teamwork`).
+   - `wrap_up_and_commit` (< 12%): finish active edit, verify, commit, and pause.
+   - `exhausted_stop` (<= 2%): stop immediately and report reset timer.
