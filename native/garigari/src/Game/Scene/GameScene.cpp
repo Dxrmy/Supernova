@@ -3,6 +3,7 @@
 #include "Game/Camera/CameraDirector.hpp"
 #include "Game/Gravity/PlanetGravityManager.hpp"
 #include "Game/Gravity/PointGravity.hpp"
+#include "Game/LiveActor/Nerve.hpp"
 #include "Game/Player/MarioActor.hpp"
 #include "Game/Scene/StageDataHolder.hpp"
 #include "Game/System/GameDataFunction.hpp"
@@ -74,35 +75,158 @@ namespace {
     bool sTitleWaitStarted = false;
     bool sPressStartWaitStarted = false;
     bool sFileSelectWaitStarted = false;
-    int sFileFocus = 0;       // 0..2 = File 1..3, 3 = Icon (MiiButton), 4 = Erase (DeleteButton)
-    int sPrevFileFocus = -1;
     bool sConfirmOpen = false;
     bool sEraseConfirm = false;
     bool sUseLuigiIcon = false;
     s32 sStageCoins = 0;
     s32 sStageStarPieces = 0;
     s32 sStageLife = 3;
+}  // namespace
 
-    const char* focusPaneName(int focus) {
-        switch (focus) {
-        case 3: return "MiiButton";
-        case 4: return "DeleteButton";
-        default: return "StartButton";
-        }
+// NerveExecutor button controller ported from Petari's ButtonPaneController
+class FileButtonCtrl : public NerveExecutor {
+public:
+    FileButtonCtrl(const char* pPaneName, const char* pBoundingPaneName);
+    void appear(LayoutManager* pHost);
+    void forceToWait();
+    void setPointing(bool pointing) { mIsPointing = pointing; }
+    bool isPointing() const;
+    bool isDecided() const;
+    bool isDecidedWait() const;
+    const char* getPaneName() const { return mPaneName; }
+    const char* getBoundingPaneName() const { return mBoundingPaneName; }
+    bool trySelect(bool padTriggerDecide);
+
+    void exeHidden() {}
+    void exeAppear();
+    void exeWait();
+    void exePointing();
+    void exeNotPointing();
+    void exeDecided();
+    void exeDecidedWait() {}
+
+private:
+    LayoutManager* mHost;
+    const char* mPaneName;
+    const char* mBoundingPaneName;
+    bool mIsPointing;
+    bool mIsSelected;
+    bool mIsActive;
+};
+
+namespace NrvFileButtonCtrl {
+    NEW_NERVE(FileButtonCtrlNrvHidden, FileButtonCtrl, Hidden);
+    NEW_NERVE(FileButtonCtrlNrvAppear, FileButtonCtrl, Appear);
+    NEW_NERVE(FileButtonCtrlNrvWait, FileButtonCtrl, Wait);
+    NEW_NERVE(FileButtonCtrlNrvPointing, FileButtonCtrl, Pointing);
+    NEW_NERVE(FileButtonCtrlNrvNotPointing, FileButtonCtrl, NotPointing);
+    NEW_NERVE(FileButtonCtrlNrvDecided, FileButtonCtrl, Decided);
+    NEW_NERVE(FileButtonCtrlNrvDecidedWait, FileButtonCtrl, DecidedWait);
+}  // namespace NrvFileButtonCtrl
+
+using namespace NrvFileButtonCtrl;
+
+FileButtonCtrl::FileButtonCtrl(const char* pPaneName, const char* pBoundingPaneName)
+    : NerveExecutor(pPaneName),
+      mHost(nullptr),
+      mPaneName(pPaneName),
+      mBoundingPaneName(pBoundingPaneName),
+      mIsPointing(false),
+      mIsSelected(false),
+      mIsActive(false) {
+}
+
+void FileButtonCtrl::appear(LayoutManager* pHost) {
+    if (mSpine == nullptr) {
+        initNerve(GET_NERVE_ANON(FileButtonCtrlNrvHidden));
     }
+    mHost = pHost;
+    mIsPointing = false;
+    mIsSelected = false;
+    mIsActive = true;
+    setNerve(GET_NERVE_ANON(FileButtonCtrlNrvAppear));
+}
 
-    void updateFileFocusAnims(LayoutManager* pLayout, int newFocus, int activeSlot) {
-        if (pLayout != nullptr && newFocus != sPrevFileFocus) {
-            if (sPrevFileFocus >= 0) {
-                const char* prevName = focusPaneName(sPrevFileFocus);
-                Smg2Ui::startPaneAnim(pLayout, prevName, "ButtonSelectOut", 0u);
-                Smg2Ui::setPaneScale(pLayout, prevName, 1.0f, 1.0f);
-            }
-            const char* curName = focusPaneName(newFocus);
-            Smg2Ui::startPaneAnim(pLayout, curName, "ButtonSelectIn", 0u);
-            Smg2Ui::setPaneScale(pLayout, curName, 1.12f, 1.12f);
-            sPrevFileFocus = newFocus;
-        }
+void FileButtonCtrl::forceToWait() {
+    mIsSelected = false;
+    mIsPointing = false;
+    setNerve(GET_NERVE_ANON(FileButtonCtrlNrvWait));
+}
+
+bool FileButtonCtrl::isPointing() const { return isNerve(GET_NERVE_ANON(FileButtonCtrlNrvPointing)); }
+bool FileButtonCtrl::isDecided() const { return isNerve(GET_NERVE_ANON(FileButtonCtrlNrvDecided)); }
+bool FileButtonCtrl::isDecidedWait() const { return isNerve(GET_NERVE_ANON(FileButtonCtrlNrvDecidedWait)); }
+
+bool FileButtonCtrl::trySelect(bool padTriggerDecide) {
+    if (!mIsActive) return false;
+    if (isPointing() && padTriggerDecide) {
+        mIsSelected = true;
+        setNerve(GET_NERVE_ANON(FileButtonCtrlNrvDecided));
+        return true;
+    }
+    return false;
+}
+
+void FileButtonCtrl::exeAppear() {
+    if (getNerveStep() == 0) {
+        Smg2Ui::setPaneVisible(mHost, mPaneName, true);
+        Smg2Ui::startPaneAnim(mHost, mPaneName, "ButtonAppear", 0u);
+        Smg2Ui::setPaneScale(mHost, mPaneName, 1.0f, 1.0f);
+    }
+    if (getNerveStep() >= 10) {
+        setNerve(GET_NERVE_ANON(FileButtonCtrlNrvWait));
+    }
+}
+
+void FileButtonCtrl::exeWait() {
+    if (getNerveStep() == 0) {
+        Smg2Ui::startPaneAnim(mHost, mPaneName, "ButtonWait", 0u);
+        Smg2Ui::setPaneScale(mHost, mPaneName, 1.0f, 1.0f);
+    }
+    if (mIsPointing) {
+        setNerve(GET_NERVE_ANON(FileButtonCtrlNrvPointing));
+    }
+}
+
+void FileButtonCtrl::exePointing() {
+    if (getNerveStep() == 0) {
+        Smg2Ui::startPaneAnim(mHost, mPaneName, "ButtonSelectIn", 0u);
+        Smg2Ui::setPaneScale(mHost, mPaneName, 1.12f, 1.12f);
+    }
+    if (!mIsPointing) {
+        setNerve(GET_NERVE_ANON(FileButtonCtrlNrvNotPointing));
+    }
+}
+
+void FileButtonCtrl::exeNotPointing() {
+    if (getNerveStep() == 0) {
+        Smg2Ui::startPaneAnim(mHost, mPaneName, "ButtonSelectOut", 0u);
+        Smg2Ui::setPaneScale(mHost, mPaneName, 1.0f, 1.0f);
+    }
+    if (mIsPointing) {
+        setNerve(GET_NERVE_ANON(FileButtonCtrlNrvPointing));
+    } else if (getNerveStep() >= 8) {
+        setNerve(GET_NERVE_ANON(FileButtonCtrlNrvWait));
+    }
+}
+
+void FileButtonCtrl::exeDecided() {
+    if (getNerveStep() == 0) {
+        Smg2Ui::startPaneAnim(mHost, mPaneName, "ButtonDecide", 0u);
+    }
+    if (getNerveStep() >= 6) {
+        setNerve(GET_NERVE_ANON(FileButtonCtrlNrvDecidedWait));
+    }
+}
+
+namespace {
+    FileButtonCtrl sStartBtn("StartButton", "BoxStartButton");
+    FileButtonCtrl sMiiBtn("MiiButton", "PicMii");
+    FileButtonCtrl sDeleteBtn("DeleteButton", "PicDelete");
+    FileButtonCtrl* sFileButtons[3] = { &sStartBtn, &sMiiBtn, &sDeleteBtn };
+    FileButtonCtrl* sFocusedBtn = &sStartBtn;
+
+    void updateFileNumberCards(int activeSlot) {
         for (int i = 0; i < 3; ++i) {
             if (sFileNumberLayouts[i] == nullptr) continue;
             const bool selected = (i == activeSlot - 1);
@@ -231,14 +355,16 @@ void GameScene::enterFileSelect() {
     }
     Smg2Ui::setPaneVisible(sFileSelectLayout, "P2ManualButton", false);
     sFileSelectWaitStarted = false;
-    sFileFocus = (mSelectedFileSlot >= 1 && mSelectedFileSlot <= 3) ? (mSelectedFileSlot - 1) : 0;
-    sPrevFileFocus = -1;
     sConfirmOpen = false;
     sEraseConfirm = false;
+    sFocusedBtn = &sStartBtn;
+    for (FileButtonCtrl* btn : sFileButtons) {
+        btn->appear(sFileSelectLayout);
+    }
     Smg2Ui::startRootAnimFallback(sFileSelectLayout, "Appear", "Wait", 0u);
     Smg2Ui::startRootAnimFallback(sFileInfoLayout, "Appear", "Wait", 0u);
     populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
-    updateFileFocusAnims(sFileSelectLayout, sFileFocus, mSelectedFileSlot);
+    updateFileNumberCards(mSelectedFileSlot);
     nebula_log("[SMG2-SCENE] GameScene -> File Select (slot=%d, user='%s', stars=%d)",
                mSelectedFileSlot, GameDataFunction::getUserName(), GameDataFunction::calcCurrentPowerStarNum());
 }
@@ -344,52 +470,59 @@ void GameScene::update() {
             sPrevPtrY = ptrY;
         }
         if (hasPtr && (ptrMoved || (pressed & NEBULA_BUTTON_A) != 0u) && !sConfirmOpen && !sEraseConfirm) {
-            if (Smg2Ui::isPointingPane(sFileSelectLayout, "PicMii", ptrX, ptrY) ||
-                Smg2Ui::isPointingPane(sFileSelectLayout, "MiiButton", ptrX, ptrY)) {
-                sFileFocus = 3;
-            } else if (Smg2Ui::isPointingPane(sFileSelectLayout, "PicDelete", ptrX, ptrY) ||
-                       Smg2Ui::isPointingPane(sFileSelectLayout, "DeleteButton", ptrX, ptrY)) {
-                sFileFocus = 4;
-            } else if (Smg2Ui::isPointingPane(sFileSelectLayout, "BoxStartButton", ptrX, ptrY) ||
-                       Smg2Ui::isPointingPane(sFileSelectLayout, "StartButton", ptrX, ptrY)) {
-                sFileFocus = mSelectedFileSlot - 1;
+            for (FileButtonCtrl* btn : sFileButtons) {
+                if (Smg2Ui::isPointingPane(sFileSelectLayout, btn->getBoundingPaneName(), ptrX, ptrY) ||
+                    Smg2Ui::isPointingPane(sFileSelectLayout, btn->getPaneName(), ptrX, ptrY)) {
+                    sFocusedBtn = btn;
+                    break;
+                }
             }
         }
         if (!sConfirmOpen && !sEraseConfirm) {
             if ((pressed & NEBULA_BUTTON_UP) != 0u) {
-                sFileFocus = (sFileFocus <= 2) ? 3 : (mSelectedFileSlot - 1);
+                sFocusedBtn = (sFocusedBtn == &sStartBtn) ? &sMiiBtn : &sStartBtn;
             } else if ((pressed & NEBULA_BUTTON_DOWN) != 0u) {
-                sFileFocus = (sFileFocus >= 3) ? (mSelectedFileSlot - 1) : 4;
+                sFocusedBtn = (sFocusedBtn != &sStartBtn) ? &sStartBtn : &sDeleteBtn;
             } else if ((pressed & NEBULA_BUTTON_LEFT) != 0u) {
-                sFileFocus = (sFileFocus == 4) ? 3 : (sFileFocus == 3 ? 4 : (sFileFocus + 2) % 3);
+                if (sFocusedBtn == &sDeleteBtn) sFocusedBtn = &sMiiBtn;
+                else if (sFocusedBtn == &sMiiBtn) sFocusedBtn = &sDeleteBtn;
+                else mSelectedFileSlot = (mSelectedFileSlot > 1) ? (mSelectedFileSlot - 1) : 3;
             } else if ((pressed & NEBULA_BUTTON_RIGHT) != 0u) {
-                sFileFocus = (sFileFocus == 3) ? 4 : (sFileFocus == 4 ? 3 : (sFileFocus + 1) % 3);
+                if (sFocusedBtn == &sMiiBtn) sFocusedBtn = &sDeleteBtn;
+                else if (sFocusedBtn == &sDeleteBtn) sFocusedBtn = &sMiiBtn;
+                else mSelectedFileSlot = (mSelectedFileSlot < 3) ? (mSelectedFileSlot + 1) : 1;
             }
-            if (sFileFocus >= 0 && sFileFocus <= 2 && mSelectedFileSlot != sFileFocus + 1) {
-                mSelectedFileSlot = sFileFocus + 1;
-                populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
+            populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
+            updateFileNumberCards(mSelectedFileSlot);
+        }
+        for (FileButtonCtrl* btn : sFileButtons) {
+            btn->setPointing(btn == sFocusedBtn);
+            btn->updateNerve();
+            if (btn->isDecidedWait()) {
+                btn->forceToWait();
             }
-            updateFileFocusAnims(sFileSelectLayout, sFileFocus, mSelectedFileSlot);
         }
         Smg2Ui::movementLayout(sFileSelectLayout);
         Smg2Ui::movementLayout(sFileInfoLayout);
         for (int i = 0; i < 3; ++i) {
             Smg2Ui::movementLayout(sFileNumberLayouts[i]);
         }
-        if ((pressed & (NEBULA_BUTTON_A | NEBULA_BUTTON_PLUS)) != 0u) {
-            Smg2Ui::startPaneAnim(sFileSelectLayout, focusPaneName(sFileFocus), "ButtonReaction", 0u);
-            if (!sConfirmOpen && !sEraseConfirm && sFileFocus <= 2) {
-                sConfirmOpen = true;
-                Smg2Ui::setTextBoxMessage(sFileSelectLayout, "StartButton", u"Start this file?");
-                nebula_log("[SMG2-UI] FileSelect slot %d: Start this file? (A=Confirm, B=Cancel)", mSelectedFileSlot);
-            } else if (!sConfirmOpen && !sEraseConfirm && sFileFocus == 3) {
-                sUseLuigiIcon = !sUseLuigiIcon;
-                populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
-                nebula_log("[SMG2-UI] FileSelect Icon toggled -> %s", sUseLuigiIcon ? "Luigi" : "Mario");
-            } else if (!sConfirmOpen && !sEraseConfirm && sFileFocus == 4) {
-                sEraseConfirm = true;
-                Smg2Ui::setTextBoxMessage(sFileSelectLayout, "DeleteButton", u"Erase File?");
-                nebula_log("[SMG2-UI] FileSelect Erase prompt for slot %d (A=Confirm, B=Cancel)", mSelectedFileSlot);
+        const bool decideTrigger = (pressed & (NEBULA_BUTTON_A | NEBULA_BUTTON_PLUS)) != 0u;
+        if (decideTrigger) {
+            if (!sConfirmOpen && !sEraseConfirm) {
+                if (sStartBtn.trySelect(true)) {
+                    sConfirmOpen = true;
+                    Smg2Ui::setTextBoxMessage(sFileSelectLayout, "StartButton", u"Start this file?");
+                    nebula_log("[SMG2-UI] FileSelect slot %d: Start this file? (A=Confirm, B=Cancel)", mSelectedFileSlot);
+                } else if (sMiiBtn.trySelect(true)) {
+                    sUseLuigiIcon = !sUseLuigiIcon;
+                    populateFileSelectPanes(sFileSelectLayout, mSelectedFileSlot);
+                    nebula_log("[SMG2-UI] FileSelect Icon toggled -> %s", sUseLuigiIcon ? "Luigi" : "Mario");
+                } else if (sDeleteBtn.trySelect(true)) {
+                    sEraseConfirm = true;
+                    Smg2Ui::setTextBoxMessage(sFileSelectLayout, "DeleteButton", u"Erase File?");
+                    nebula_log("[SMG2-UI] FileSelect Erase prompt for slot %d (A=Confirm, B=Cancel)", mSelectedFileSlot);
+                }
             } else if (sEraseConfirm) {
                 sEraseConfirm = false;
                 Smg2Ui::setTextBoxMessage(sFileSelectLayout, "DeleteButton", u"Erase");
@@ -398,7 +531,7 @@ void GameScene::update() {
                 Smg2Ui::setTextBoxNumber(sFileSelectLayout, "MissCounter", 0);
                 nebula_log("[SMG2-UI] FileSelect slot %d erased", mSelectedFileSlot);
             } else if (sConfirmOpen) {
-                Smg2Ui::startPaneAnim(sFileSelectLayout, "StartButton", "ButtonDecide", 0u);
+                sStartBtn.trySelect(true);
                 sTitleSeq.setSelectedSlot(mSelectedFileSlot);
                 sTitleSeq.decide();
                 enterStage(nullptr);
@@ -422,8 +555,9 @@ void GameScene::update() {
             }
         }
     } else {
-        sMarioActor.update(stickX, stickY, buttons, sStageGravity, sCameraDirector.getYaw());
-        sCameraDirector.update(sMarioActor.getPosition(), sMarioActor.getUpVec(), sMarioActor.getYaw(), buttons, pressed);
+        sMarioActor.update(stickX, stickY, buttons, sStageGravity,
+                           sCameraDirector.getPosition(), sCameraDirector.getTarget(), sCameraDirector.getUp());
+        sCameraDirector.update(sMarioActor.getPosition(), sMarioActor.getUpVec(), sMarioActor.getFrontVec(), buttons, pressed);
         const f32 stickMag = __builtin_sqrtf(stickX * stickX + stickY * stickY);
         Smg23D::setMarioAnim(sMarioActor.getAnimState(), stickMag);
         const s32 prevCoins = sStageCoins;

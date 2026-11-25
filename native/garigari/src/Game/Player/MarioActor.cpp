@@ -2,8 +2,10 @@
 #include "Game/Gravity/GravityInfo.hpp"
 #include "Game/Gravity/PlanetGravity.hpp"
 #include "Game/Gravity/PlanetGravityManager.hpp"
+#include "Game/LiveActor/Nerve.hpp"
 #include <nebula_game_api.h>
 #include <nebula_module.h>
+#include <cstring>
 
 namespace Smg23D {
     bool resolveSphereCollision(f32* ioX, f32* ioY, f32* ioZ, f32 radius, f32* outNormalX, f32* outNormalY, f32* outNormalZ, bool topSurfaceOnly = false);
@@ -11,7 +13,21 @@ namespace Smg23D {
                        f32* outX, f32* outY, f32* outZ, f32* outNx, f32* outNy, f32* outNz, bool topSurfaceOnly = false);
 }  // namespace Smg23D
 
+namespace NrvMarioActor {
+    NEW_NERVE(MarioActorNrvWait, MarioActor, Wait);
+    NEW_NERVE(MarioActorNrvWalk, MarioActor, Walk);
+    NEW_NERVE(MarioActorNrvJump, MarioActor, Jump);
+    NEW_NERVE(MarioActorNrvFall, MarioActor, Fall);
+}  // namespace NrvMarioActor
+
 namespace {
+    // Authentic SMG1/SMG2 MarioConstTable defaults (native/petari/src/Game/Player/MarioConst.cpp)
+    constexpr f32 kJumpHeight = 22.0f;
+    constexpr f32 kGravityJumping = 1.8f;
+    constexpr f32 kMaxDropSpeed = 35.0f;
+    constexpr f32 kWalkSpeedMax = 14.0f;
+    constexpr f32 kStickMargin = 0.1f;
+
     void normalizeVec3(TVec3f& v, const TVec3f& fallback) {
         const f32 len2 = v.x * v.x + v.y * v.y + v.z * v.z;
         if (len2 > 1.0e-6f) {
@@ -23,18 +39,33 @@ namespace {
             v = fallback;
         }
     }
+
+    TVec3f crossVec3(const TVec3f& a, const TVec3f& b) {
+        return TVec3f(a.y * b.z - a.z * b.y,
+                      a.z * b.x - a.x * b.z,
+                      a.x * b.y - a.y * b.x);
+    }
 }  // namespace
 
+using namespace NrvMarioActor;
+
 MarioActor::MarioActor()
-    : mPos(0.0f, 1600.0f, 0.0f),
+    : NerveExecutor("MarioActor"),
+      mPos(0.0f, 1600.0f, 0.0f),
       mSafeSpawnPos(0.0f, 1600.0f, 0.0f),
       mVel(0.0f, 0.0f, 0.0f),
       mGravity(0.0f, -1.0f, 0.0f),
       mUp(0.0f, 1.0f, 0.0f),
+      mMoveUpVec(0.0f, 1.0f, 0.0f),
+      mFrontVec(0.0f, 0.0f, 1.0f),
       mYaw(0.0f),
       mAnimState(0),
       mGrounded(false),
-      mUsePlanarGravity(true) {
+      mUsePlanarGravity(true),
+      mStickX(0.0f),
+      mStickY(0.0f),
+      mButtons(0u),
+      mPrevButtons(0u) {
 }
 
 void MarioActor::init(const char* pStageName) {
@@ -42,9 +73,12 @@ void MarioActor::init(const char* pStageName) {
     mVel.set(0.0f, 0.0f, 0.0f);
     mGravity.set(0.0f, -1.0f, 0.0f);
     mUp.set(0.0f, 1.0f, 0.0f);
+    mMoveUpVec.set(0.0f, 1.0f, 0.0f);
+    mFrontVec.set(0.0f, 0.0f, 1.0f);
     mYaw = 0.0f;
     mAnimState = 0;
     mGrounded = false;
+    mPrevButtons = 0u;
     mUsePlanarGravity = true;
     if (pStageName != nullptr && std::strstr(pStageName, "Disc") == nullptr &&
         std::strstr(pStageName, "IslandFleet") == nullptr &&
@@ -52,100 +86,71 @@ void MarioActor::init(const char* pStageName) {
         mUsePlanarGravity = false;
     }
 
-    // Snap initial spawn onto top deck KCL surface (normal.y > 0.05f when planar/disc)
     f32 hx = 0.0f, hy = 0.0f, hz = 0.0f, nx = 0.0f, ny = 1.0f, nz = 0.0f;
     if (Smg23D::raycastPlanet(mPos.x, mPos.y + 400.0f, mPos.z, 0.0f, -1.0f, 0.0f, 4000.0f,
                               &hx, &hy, &hz, &nx, &ny, &nz, mUsePlanarGravity)) {
         mPos.set(hx, hy, hz);
         mUp.set(nx, ny, nz);
+        mMoveUpVec = mUp;
         mGrounded = true;
     }
     mSafeSpawnPos = mPos;
+    if (mSpine == nullptr) {
+        initNerve(GET_NERVE_ANON(MarioActorNrvWait));
+    } else {
+        setNerve(GET_NERVE_ANON(MarioActorNrvWait));
+    }
     nebula_log("[SMG2-PLAYER] MarioActor::init(stage='%s', planar=%d) spawn=(%.1f, %.1f, %.1f) grounded=%d",
                pStageName != nullptr ? pStageName : "", mUsePlanarGravity ? 1 : 0, mPos.x, mPos.y, mPos.z, mGrounded ? 1 : 0);
 }
 
-void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManager* pGravityMgr, f32 camYaw) {
-    if (mUsePlanarGravity) {
-        mGravity.set(0.0f, -1.0f, 0.0f);
-    } else if (pGravityMgr != nullptr) {
-        GravityInfo info{};
-        TVec3f grav(0.0f, -1.0f, 0.0f);
-        if (pGravityMgr->calcTotalGravityVector(&grav, &info, mPos, GRAVITY_TYPE_NORMAL, 0, nullptr)) {
-            normalizeVec3(grav, TVec3f(0.0f, -1.0f, 0.0f));
-            mGravity = grav;
-        }
-    }
+// Ported from Mario::calcMoveDir in native/petari/src/Game/Player/MarioMove.cpp
+void MarioActor::calcMoveDir(f32 stickX, f32 stickY, const TVec3f& camPos, const TVec3f& camTarget, const TVec3f& camUp, TVec3f* pMoveDir) {
+    TVec3f screenZDir(camPos.x - camTarget.x, camPos.y - camTarget.y, camPos.z - camTarget.z);
+    normalizeVec3(screenZDir, TVec3f(0.0f, 0.0f, 1.0f));
+    TVec3f screenXDir = crossVec3(camUp, screenZDir);
+    normalizeVec3(screenXDir, TVec3f(1.0f, 0.0f, 0.0f));
+    TVec3f screenYDir = crossVec3(screenZDir, screenXDir);
+    normalizeVec3(screenYDir, TVec3f(0.0f, 1.0f, 0.0f));
 
-    // Target up vector is opposite gravity (or surface normal when grounded)
-    TVec3f targetUp(-mGravity.x, -mGravity.y, -mGravity.z);
-    normalizeVec3(targetUp, TVec3f(0.0f, 1.0f, 0.0f));
-
-    // Smoothly align mUp toward targetUp
-    mUp.x += (targetUp.x - mUp.x) * 0.25f;
-    mUp.y += (targetUp.y - mUp.y) * 0.25f;
-    mUp.z += (targetUp.z - mUp.z) * 0.25f;
-    normalizeVec3(mUp, targetUp);
-
-    const f32 stickMagRaw = __builtin_sqrtf(stickX * stickX + stickY * stickY);
-    const f32 stickMag = (stickMagRaw > 1.0f) ? 1.0f : stickMagRaw;
-    const f32 moveSpeed = 14.0f;
-    const f32 vUp = mVel.x * mUp.x + mVel.y * mUp.y + mVel.z * mUp.z;
-
-    if (stickMag > 0.1f) {
-        // Camera-relative world direction (camYaw=0 places camera at +Z looking toward -Z)
-        const f32 cosY = __builtin_cosf(camYaw);
-        const f32 sinY = __builtin_sinf(camYaw);
-        const f32 worldX = stickX * cosY - stickY * sinY;
-        const f32 worldZ = -stickX * sinY - stickY * cosY;
-
-        // Project onto surface tangent plane perpendicular to mUp
-        const f32 dotU = worldX * mUp.x + worldZ * mUp.z;
-        TVec3f moveDir(worldX - mUp.x * dotU, -mUp.y * dotU, worldZ - mUp.z * dotU);
-        normalizeVec3(moveDir, TVec3f(worldX, 0.0f, worldZ));
-
-        // Smoothly rotate Mario's facing yaw toward movement direction
-        const f32 targetYaw = __builtin_atan2f(moveDir.x, moveDir.z);
-        f32 diff = targetYaw - mYaw;
-        while (diff > 3.14159265f) diff -= 6.2831853f;
-        while (diff < -3.14159265f) diff += 6.2831853f;
-        mYaw += diff * 0.25f;
-
-        const f32 speed = stickMag * moveSpeed;
-        mVel.x = mUp.x * vUp + moveDir.x * speed;
-        mVel.y = mUp.y * vUp + moveDir.y * speed;
-        mVel.z = mUp.z * vUp + moveDir.z * speed;
+    TVec3f marioUpDir(-mGravity.x, -mGravity.y, -mGravity.z);
+    normalizeVec3(marioUpDir, TVec3f(0.0f, 1.0f, 0.0f));
+    const f32 dotUp = mMoveUpVec.x * marioUpDir.x + mMoveUpVec.y * marioUpDir.y + mMoveUpVec.z * marioUpDir.z;
+    if (dotUp <= 0.0f) {
+        mMoveUpVec = marioUpDir;
     } else {
-        mVel.x = mUp.x * vUp;
-        mVel.y = mUp.y * vUp;
-        mVel.z = mUp.z * vUp;
+        mMoveUpVec.x += (marioUpDir.x - mMoveUpVec.x) * 0.1f;
+        mMoveUpVec.y += (marioUpDir.y - mMoveUpVec.y) * 0.1f;
+        mMoveUpVec.z += (marioUpDir.z - mMoveUpVec.z) * 0.1f;
+        normalizeVec3(mMoveUpVec, marioUpDir);
     }
 
-    if (mGrounded && (buttons & NEBULA_BUTTON_A) != 0u) {
-        const f32 jumpSpeed = 24.0f;
-        mVel.x += mUp.x * jumpSpeed;
-        mVel.y += mUp.y * jumpSpeed;
-        mVel.z += mUp.z * jumpSpeed;
-        mGrounded = false;
+    const f32 moveDirScreenY = screenYDir.x * mMoveUpVec.x + screenYDir.y * mMoveUpVec.y + screenYDir.z * mMoveUpVec.z;
+    const f32 moveDirScreenZ = screenZDir.x * mMoveUpVec.x + screenZDir.y * mMoveUpVec.y + screenZDir.z * mMoveUpVec.z;
+    const f32 absY = (moveDirScreenY < 0.0f) ? -moveDirScreenY : moveDirScreenY;
+    const f32 absZ = (moveDirScreenZ < 0.0f) ? -moveDirScreenZ : moveDirScreenZ;
+
+    TVec3f groundXDir, groundYDirOrtho;
+    if (absZ > absY) {
+        groundYDirOrtho = (moveDirScreenZ < 0.0f) ? TVec3f(-screenYDir.x, -screenYDir.y, -screenYDir.z) : screenYDir;
+        groundXDir = crossVec3(groundYDirOrtho, mMoveUpVec);
     } else {
-        mVel.x += mGravity.x * 1.4f;
-        mVel.y += mGravity.y * 1.4f;
-        mVel.z += mGravity.z * 1.4f;
+        groundYDirOrtho = (moveDirScreenY < 0.0f) ? screenZDir : TVec3f(-screenZDir.x, -screenZDir.y, -screenZDir.z);
+        const TVec3f zAxis = (moveDirScreenY < 0.0f) ? screenZDir : TVec3f(-screenZDir.x, -screenZDir.y, -screenZDir.z);
+        groundXDir = crossVec3(zAxis, mMoveUpVec);
     }
 
-    // Clamp fall speed to prevent KCL tunneling
-    const f32 vFall = mVel.x * mGravity.x + mVel.y * mGravity.y + mVel.z * mGravity.z;
-    if (vFall > 35.0f) {
-        const f32 excess = vFall - 35.0f;
-        mVel.x -= mGravity.x * excess;
-        mVel.y -= mGravity.y * excess;
-        mVel.z -= mGravity.z * excess;
-    }
-    mPos.x += mVel.x;
-    mPos.y += mVel.y;
-    mPos.z += mVel.z;
+    TVec3f groundYDir = crossVec3(screenXDir, mMoveUpVec);
+    normalizeVec3(groundXDir, screenXDir);
+    normalizeVec3(groundYDir, groundYDirOrtho);
 
-    // Resolve KCL sphere collision (radius 45.0f around Mario's center at mPos + mUp * 45)
+    pMoveDir->set(
+        groundXDir.x * stickX - groundYDir.x * stickY,
+        groundXDir.y * stickX - groundYDir.y * stickY,
+        groundXDir.z * stickX - groundYDir.z * stickY);
+}
+
+void MarioActor::resolveTerrainCollision() {
     f32 cx = mPos.x + mUp.x * 45.0f;
     f32 cy = mPos.y + mUp.y * 45.0f;
     f32 cz = mPos.z + mUp.z * 45.0f;
@@ -161,7 +166,6 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
             mGrounded = true;
         }
     } else {
-        // Raycast downward at the NEW horizontal position (mPos) and adjust ONLY altitude along mUp
         f32 hx = 0.0f, hy = 0.0f, hz = 0.0f;
         const f32 vnGravity = mVel.x * mGravity.x + mVel.y * mGravity.y + mVel.z * mGravity.z;
         if ((mGrounded || vnGravity >= 0.0f) &&
@@ -184,20 +188,126 @@ void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManage
         }
     }
 
-    // Void fall kill plane & respawn
     if (mUsePlanarGravity && mPos.y < -1500.0f) {
         mPos = mSafeSpawnPos;
         mVel.set(0.0f, 0.0f, 0.0f);
         mUp.set(0.0f, 1.0f, 0.0f);
         mGrounded = true;
+        setNerve(GET_NERVE_ANON(MarioActorNrvWait));
         nebula_log("[SMG2-PLAYER] Void fall respawn -> (%.1f, %.1f, %.1f)", mPos.x, mPos.y, mPos.z);
     }
+}
 
+void MarioActor::exeWait() {
+    mAnimState = 0;
+    const f32 stickMag = __builtin_sqrtf(mStickX * mStickX + mStickY * mStickY);
     if (!mGrounded) {
-        mAnimState = 2;  // Jump
-    } else if (stickMag > 0.1f) {
-        mAnimState = 1;  // Run
-    } else {
-        mAnimState = 0;  // Wait
+        setNerve(GET_NERVE_ANON(MarioActorNrvFall));
+    } else if ((mButtons & ~mPrevButtons & NEBULA_BUTTON_A) != 0u) {
+        setNerve(GET_NERVE_ANON(MarioActorNrvJump));
+    } else if (stickMag > kStickMargin) {
+        setNerve(GET_NERVE_ANON(MarioActorNrvWalk));
     }
+}
+
+void MarioActor::exeWalk() {
+    mAnimState = 1;
+    const f32 stickMag = __builtin_sqrtf(mStickX * mStickX + mStickY * mStickY);
+    if (!mGrounded) {
+        setNerve(GET_NERVE_ANON(MarioActorNrvFall));
+    } else if ((mButtons & ~mPrevButtons & NEBULA_BUTTON_A) != 0u) {
+        setNerve(GET_NERVE_ANON(MarioActorNrvJump));
+    } else if (stickMag <= kStickMargin) {
+        setNerve(GET_NERVE_ANON(MarioActorNrvWait));
+    }
+}
+
+void MarioActor::exeJump() {
+    mAnimState = 2;
+    if (getNerveStep() == 0) {
+        mVel.x += mUp.x * kJumpHeight;
+        mVel.y += mUp.y * kJumpHeight;
+        mVel.z += mUp.z * kJumpHeight;
+        mGrounded = false;
+    } else if (mGrounded) {
+        setNerve(GET_NERVE_ANON(MarioActorNrvWait));
+    }
+}
+
+void MarioActor::exeFall() {
+    mAnimState = 2;
+    if (mGrounded) {
+        setNerve(GET_NERVE_ANON(MarioActorNrvWait));
+    }
+}
+
+void MarioActor::update(f32 stickX, f32 stickY, u32 buttons, PlanetGravityManager* pGravityMgr,
+                        const TVec3f& camPos, const TVec3f& camTarget, const TVec3f& camUp) {
+    mStickX = stickX;
+    mStickY = stickY;
+    mButtons = buttons;
+
+    if (mUsePlanarGravity) {
+        mGravity.set(0.0f, -1.0f, 0.0f);
+    } else if (pGravityMgr != nullptr) {
+        GravityInfo info{};
+        TVec3f grav(0.0f, -1.0f, 0.0f);
+        if (pGravityMgr->calcTotalGravityVector(&grav, &info, mPos, GRAVITY_TYPE_NORMAL, 0, nullptr)) {
+            normalizeVec3(grav, TVec3f(0.0f, -1.0f, 0.0f));
+            mGravity = grav;
+        }
+    }
+
+    TVec3f targetUp(-mGravity.x, -mGravity.y, -mGravity.z);
+    normalizeVec3(targetUp, TVec3f(0.0f, 1.0f, 0.0f));
+    mUp.x += (targetUp.x - mUp.x) * 0.25f;
+    mUp.y += (targetUp.y - mUp.y) * 0.25f;
+    mUp.z += (targetUp.z - mUp.z) * 0.25f;
+    normalizeVec3(mUp, targetUp);
+
+    TVec3f moveDir(0.0f, 0.0f, 0.0f);
+    calcMoveDir(stickX, stickY, camPos, camTarget, camUp, &moveDir);
+    const f32 moveLen = __builtin_sqrtf(moveDir.x * moveDir.x + moveDir.y * moveDir.y + moveDir.z * moveDir.z);
+    const f32 clampedMag = (moveLen > 1.0f) ? 1.0f : moveLen;
+    const f32 vUp = mVel.x * mUp.x + mVel.y * mUp.y + mVel.z * mUp.z;
+
+    if (clampedMag > kStickMargin) {
+        TVec3f moveNorm(moveDir.x / moveLen, moveDir.y / moveLen, moveDir.z / moveLen);
+        mFrontVec = moveNorm;
+        const f32 targetYaw = __builtin_atan2f(moveNorm.x, moveNorm.z);
+        f32 diff = targetYaw - mYaw;
+        while (diff > 3.14159265f) diff -= 6.2831853f;
+        while (diff < -3.14159265f) diff += 6.2831853f;
+        mYaw += diff * 0.25f;
+
+        const f32 speed = clampedMag * kWalkSpeedMax;
+        mVel.x = mUp.x * vUp + moveNorm.x * speed;
+        mVel.y = mUp.y * vUp + moveNorm.y * speed;
+        mVel.z = mUp.z * vUp + moveNorm.z * speed;
+    } else {
+        mVel.x = mUp.x * vUp;
+        mVel.y = mUp.y * vUp;
+        mVel.z = mUp.z * vUp;
+    }
+
+    updateNerve();
+    mPrevButtons = buttons;
+
+    mVel.x += mGravity.x * kGravityJumping;
+    mVel.y += mGravity.y * kGravityJumping;
+    mVel.z += mGravity.z * kGravityJumping;
+
+    const f32 vFall = mVel.x * mGravity.x + mVel.y * mGravity.y + mVel.z * mGravity.z;
+    if (vFall > kMaxDropSpeed) {
+        const f32 excess = vFall - kMaxDropSpeed;
+        mVel.x -= mGravity.x * excess;
+        mVel.y -= mGravity.y * excess;
+        mVel.z -= mGravity.z * excess;
+    }
+
+    mPos.x += mVel.x;
+    mPos.y += mVel.y;
+    mPos.z += mVel.z;
+
+    resolveTerrainCollision();
 }
